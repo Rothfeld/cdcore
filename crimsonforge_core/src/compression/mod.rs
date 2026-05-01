@@ -173,22 +173,30 @@ fn parse_dds_mip_info(data: &[u8]) -> Option<DdsMipInfo> {
     const DDPF_RGB: u32    = 0x40;
 
     let (data_offset, bytes_per_block, bpp_out) = if pf_flags & DDPF_FOURCC != 0 {
-        let (off, bpb) = match fourcc {
-            b"DXT1" | b"BC4U" | b"BC4S"           => (128, 8),
-            b"DXT3" | b"DXT5" | b"BC5U" | b"BC5S" => (128, 16),
+        let (off, bpb, bpp_dx) = match fourcc {
+            b"DXT1" | b"BC4U" | b"BC4S"           => (128, 8,  0),
+            b"DXT3" | b"DXT5" | b"BC5U" | b"BC5S" => (128, 16, 0),
             b"DX10" => {
                 if data.len() < 148 { return None; }
                 let dxgi = u32::from_le_bytes(data[128..132].try_into().unwrap());
-                let bpb = match dxgi {
-                    71 | 72                    => 8,   // BC1
-                    74|75|77|78|80|81|83|84|95|96|98|99 => 16, // BC2-BC7
-                    _ => 0,
+                // (bytes_per_block, bits_per_pixel) for each DXGI format
+                let (bpb, bpp_d) = match dxgi {
+                    71 | 72                              => (8,  0),   // BC1
+                    74|75|77|78|80|81|83|84|95|96|98|99 => (16, 0),   // BC2-BC7
+                    28|29|30|31 | 87|88|89|90|91         => (0,  32),  // RGBA8 / BGRA8
+                    24 | 25                              => (0,  32),  // R10G10B10A2
+                    10                                   => (0,  64),  // R16G16B16A16F
+                     2                                   => (0,  128), // R32G32B32A32F
+                    54 | 55                              => (0,  16),  // R16F
+                    41 | 43                              => (0,  32),  // R32F
+                    61 | 62                              => (0,  8),   // R8
+                    _ => return None,
                 };
-                (148, bpb)
+                (148, bpb, bpp_d)
             }
             _ => return None,
         };
-        (off, bpb, 0)
+        (off, bpb, bpp_dx)
     } else if pf_flags & DDPF_RGB != 0 {
         (128, 0, bpp)
     } else {
