@@ -838,6 +838,13 @@ fn verify_chain(pamt_path: &str, papgt_path: &str) -> PyResult<bool> {
     crate::repack::verify_chain(pamt_path, papgt_path).map_err(to_pyerr)
 }
 
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn decode_dds_to_rgba(py: Python<'_>, data: Vec<u8>) -> PyResult<(u32, u32, Py<PyBytes>)> {
+    let (w, h, rgba) = crate::formats::dds::decode_dds_to_rgba(&data).map_err(to_pyerr)?;
+    Ok((w, h, PyBytes::new(py, &rgba).unbind()))
+}
+
 pyo3_stub_gen::define_stub_info_gatherer!(stub_info);
 
 // ── Module definition ─────────────────────────────────────────────────────────
@@ -891,6 +898,9 @@ pub fn crimsonforge_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_prefab, m)?)?;
     m.add_function(wrap_pyfunction!(parse_paloc, m)?)?;
     m.add_function(wrap_pyfunction!(parse_pabgb, m)?)?;
+
+    // DDS
+    m.add_function(wrap_pyfunction!(decode_dds_to_rgba, m)?)?;
 
     // Repack
     m.add_function(wrap_pyfunction!(verify_chain, m)?)?;
