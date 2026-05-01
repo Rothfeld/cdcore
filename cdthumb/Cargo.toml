@@ -1,0 +1,14 @@
+[package]
+name = "cdthumb"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cdthumb"
+
+[dependencies]
+crimsonforge_core = { path = "../crimsonforge_core" }
+clap    = { version = "4", features = ["derive"] }
+rayon   = "1"
+png     = "0.17"
+walkdir = "2"
