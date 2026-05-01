@@ -7,7 +7,7 @@ edition = "2021"
 name = "ddsthumb"
 
 [dependencies]
-crimsonforge_core = { path = "../crimsonforge_core" }
+crimsonforge_core = { path = "../crimsonforge_core", default-features = false }
 clap    = { version = "4", features = ["derive"] }
 rayon   = "1"
 png     = "0.17"

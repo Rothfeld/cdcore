@@ -4,9 +4,11 @@ pub mod crypto;
 pub mod error;
 pub mod ffi;
 pub mod formats;
-pub mod python;
 pub mod repack;
 pub mod vfs;
+
+#[cfg(feature = "python")]
+pub mod python;
 
 pub use error::{ParseError, Result};
 
@@ -17,4 +19,5 @@ pub use compression::{decompress, compress_lz4, COMP_LZ4, COMP_NONE, COMP_ZLIB};
 pub use archive::{parse_papgt, parse_pamt, PapgtData, PamtData, PamtFileEntry};
 
 // PyO3 entry point — used by maturin to find the module init function
+#[cfg(feature = "python")]
 pub use python::crimsonforge_core;

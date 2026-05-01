@@ -17,13 +17,13 @@ rayon = "1"                                               # parallel PAMT group 
 thiserror = "2"                                           # ParseError derive
 sha1 = "0.11"                                             # PAC mesh baseline snapshots
 hex = "0.4"                                               # SHA-1 hex encoding for baseline filenames
-pyo3 = { version = "0.28" }                                   # Python bindings (extension-module via feature below)
-pyo3-stub-gen = "0.22"                                        # generates __init__.pyi during build
+pyo3          = { version = "0.28", optional = true }
+pyo3-stub-gen = { version = "0.22", optional = true }
 
 [features]
+# Enable Python bindings (required to build the maturin wheel).
 # extension-module tells pyo3 not to link libpython (correct for cdylib).
-# Must be passed explicitly: `--features extension-module`.
-# NOT set here as default so that stub_gen binary can link Python normally.
+python = ["pyo3", "pyo3-stub-gen"]
 extension-module = ["pyo3/extension-module"]
 
 [profile.release]
