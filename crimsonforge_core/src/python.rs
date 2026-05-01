@@ -155,6 +155,10 @@ impl PyVfsManager {
         self.inner.invalidate_group(group_dir);
     }
 
+    fn get_pamt(&self, group_dir: &str) -> Option<PyPamtData> {
+        self.inner.get_pamt(group_dir).map(|d| PyPamtData { inner: d })
+    }
+
     #[getter]
     fn packages_path(&self) -> &str {
         self.inner.packages_path()
