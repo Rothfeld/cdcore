@@ -245,12 +245,11 @@ fn densify_tracks(tracks: &[Vec<([f32; 4], u16)>]) -> (u32, u32, Vec<Vec<Keyfram
     for (bi, track) in tracks.iter().enumerate() {
         if track.is_empty() { continue; }
         let mut ci = 0usize;
-        let mut cur = track[0].0;
         for f in 0..total_frames as usize {
             while ci + 1 < track.len() && track[ci + 1].1 as usize <= f {
                 ci += 1;
             }
-            cur = track[ci].0;
+            let cur = track[ci].0;
             let rot = normalize_quat(cur);
             dense[f][bi].rotation = rot;
         }

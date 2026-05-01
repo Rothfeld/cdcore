@@ -887,7 +887,7 @@ fn is_par_file(data: Vec<u8>) -> bool {
 // ── PABC skin palette ─────────────────────────────────────────────────────────
 
 #[gen_stub_pyclass]
-#[pyclass(name = "PabcSkinRecord")]
+#[pyclass(name = "PabcSkinRecord", from_py_object)]
 #[derive(Clone)]
 pub struct PyPabcSkinRecord {
     inner: crate::formats::pabc_skin::PabcSkinRecord,
