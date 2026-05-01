@@ -6,6 +6,13 @@ edition = "2021"
 [[bin]]
 name = "ddsthumb"
 
+[profile.release]
+opt-level     = "z"
+lto           = true
+codegen-units = 1
+strip         = true
+panic         = "abort"
+
 [dependencies]
 crimsonforge_core = { path = "../crimsonforge_core", default-features = false }
 clap    = { version = "4", features = ["derive"] }
