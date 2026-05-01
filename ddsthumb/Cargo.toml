@@ -1,10 +1,10 @@
 [package]
-name = "cdthumb"
+name = "ddsthumb"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "cdthumb"
+name = "ddsthumb"
 
 [dependencies]
 crimsonforge_core = { path = "../crimsonforge_core" }

@@ -11,7 +11,7 @@ use walkdir::WalkDir;
 use crimsonforge_core::formats::dds::decode_dds_to_rgba;
 
 #[derive(Parser)]
-#[command(name = "cdthumb", about = "Generate PNG thumbnails from DDS files")]
+#[command(name = "ddsthumb", about = "Generate PNG thumbnails from DDS files")]
 struct Args {
     /// Input .dds file or directory (scanned recursively)
     input: String,
