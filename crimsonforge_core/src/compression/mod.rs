@@ -238,8 +238,8 @@ fn try_decompress_type1_dds_per_mip_sizes(data: &[u8], orig_size: usize) -> Resu
         return Err(ParseError::Other("no per-mip sizes in reserved area".into()));
     }
 
-    let body = &data[128..];
-    let mut out = data[..128].to_vec();
+    let body = &data[info.data_offset..];
+    let mut out = data[..info.data_offset].to_vec();
     let mut pos = 0usize;
 
     let mut lvl = 0;
