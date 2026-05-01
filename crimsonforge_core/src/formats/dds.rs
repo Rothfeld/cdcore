@@ -15,6 +15,12 @@ const DXGI_BC4: &[u32]  = &[80, 81];
 const DXGI_BC5: &[u32]  = &[83, 84];
 const DXGI_BC6H: &[u32] = &[95, 96];
 const DXGI_BC7: &[u32]  = &[98, 99];
+const DXGI_RGBA16F: &[u32] = &[10];       // R16G16B16A16_FLOAT
+const DXGI_RGBA32F: &[u32] = &[2];        // R32G32B32A32_FLOAT
+const DXGI_R16F: &[u32]    = &[54];       // R16_FLOAT
+const DXGI_R32F: &[u32]    = &[41];       // R32_FLOAT
+const DXGI_BGRA8: &[u32]   = &[87, 88, 89, 90, 91]; // B8G8R8A8 variants
+const DXGI_RGBA8: &[u32]   = &[28, 29, 30, 31];     // R8G8B8A8 variants
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DdsFormat {
@@ -26,8 +32,14 @@ enum DdsFormat {
     Bc6h,
     Bc7,
     Bgra32,
+    Rgba32,    // R8G8B8A8 — no channel swizzle needed
+    Rgb24,
     Luminance8,
     Luminance16,
+    Rgba16F,   // 4 x f16
+    Rgba32F,   // 4 x f32
+    R16F,      // 1 x f16 -> grayscale
+    R32F,      // 1 x f32 -> grayscale
 }
 
 struct DdsHeader {
@@ -63,18 +75,28 @@ fn parse_header(data: &[u8]) -> Result<DdsHeader> {
             b"DXT5" => (DdsFormat::Bc3, 128),
             b"BC4U" | b"BC4S" => (DdsFormat::Bc4, 128),
             b"BC5U" | b"BC5S" => (DdsFormat::Bc5, 128),
+            // D3D9 float / HDR formats (numeric FourCC values)
+            b"o\0\0\0" => (DdsFormat::R16F,    128), // 111 = D3DFMT_R16F
+            b"q\0\0\0" => (DdsFormat::Rgba16F, 128), // 113 = D3DFMT_A16B16G16R16F
+            b"t\0\0\0" => (DdsFormat::Rgba32F, 128), // 116 = D3DFMT_A32B32G32R32F
             b"DX10" => {
                 if data.len() < 148 {
                     return Err(ParseError::Other("DX10 header truncated".into()));
                 }
                 let dxgi = read_u32_le(data, 128);
-                let fmt = if DXGI_BC1.contains(&dxgi) { DdsFormat::Bc1 }
-                     else if DXGI_BC2.contains(&dxgi)  { DdsFormat::Bc2 }
-                     else if DXGI_BC3.contains(&dxgi)  { DdsFormat::Bc3 }
-                     else if DXGI_BC4.contains(&dxgi)  { DdsFormat::Bc4 }
-                     else if DXGI_BC5.contains(&dxgi)  { DdsFormat::Bc5 }
-                     else if DXGI_BC6H.contains(&dxgi) { DdsFormat::Bc6h }
-                     else if DXGI_BC7.contains(&dxgi)  { DdsFormat::Bc7 }
+                let fmt = if DXGI_BC1.contains(&dxgi)    { DdsFormat::Bc1 }
+                     else if DXGI_BC2.contains(&dxgi)    { DdsFormat::Bc2 }
+                     else if DXGI_BC3.contains(&dxgi)    { DdsFormat::Bc3 }
+                     else if DXGI_BC4.contains(&dxgi)    { DdsFormat::Bc4 }
+                     else if DXGI_BC5.contains(&dxgi)    { DdsFormat::Bc5 }
+                     else if DXGI_BC6H.contains(&dxgi)   { DdsFormat::Bc6h }
+                     else if DXGI_BC7.contains(&dxgi)    { DdsFormat::Bc7 }
+                     else if DXGI_RGBA16F.contains(&dxgi){ DdsFormat::Rgba16F }
+                     else if DXGI_RGBA32F.contains(&dxgi){ DdsFormat::Rgba32F }
+                     else if DXGI_R16F.contains(&dxgi)   { DdsFormat::R16F }
+                     else if DXGI_R32F.contains(&dxgi)   { DdsFormat::R32F }
+                     else if DXGI_BGRA8.contains(&dxgi)  { DdsFormat::Bgra32 }
+                     else if DXGI_RGBA8.contains(&dxgi)  { DdsFormat::Rgba32 }
                      else {
                          return Err(ParseError::Other(
                              format!("unsupported DXGI format {dxgi}")
@@ -86,8 +108,13 @@ fn parse_header(data: &[u8]) -> Result<DdsHeader> {
                 format!("unsupported FourCC {:?}", std::str::from_utf8(fourcc).unwrap_or("?"))
             )),
         }
-    } else if pf_flags & DDPF_RGB != 0 && bpp == 32 {
-        (DdsFormat::Bgra32, 128)
+    } else if pf_flags & DDPF_RGB != 0 {
+        let fmt = if bpp == 32 { DdsFormat::Bgra32 }
+                  else if bpp == 24 { DdsFormat::Rgb24 }
+                  else {
+                      return Err(ParseError::Other(format!("unsupported RGB bpp {bpp}")));
+                  };
+        (fmt, 128)
     } else if pf_flags & DDPF_LUMINANCE != 0 {
         let fmt = if bpp == 8 { DdsFormat::Luminance8 } else { DdsFormat::Luminance16 };
         (fmt, 128)
@@ -521,6 +548,103 @@ fn decode_luminance16(src: &[u8], width: u32, height: u32) -> Vec<u8> {
     rgba
 }
 
+fn decode_rgba32(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+    // R8G8B8A8 — already in RGBA order, copy directly.
+    let n = (width * height * 4) as usize;
+    src[..src.len().min(n)].to_vec()
+}
+
+fn decode_rgb24(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let n = (width * height) as usize;
+    let mut rgba = vec![255u8; n * 4];
+    for i in 0..n.min(src.len() / 3) {
+        let s = i * 3;
+        let d = i * 4;
+        rgba[d]     = src[s + 2]; // R (stored as BGR in legacy DDS)
+        rgba[d + 1] = src[s + 1]; // G
+        rgba[d + 2] = src[s];     // B
+    }
+    rgba
+}
+
+#[inline]
+fn f16_to_u8(bits: u16) -> u8 {
+    // Decode IEEE-754 f16 and tone-map to 0-255 via simple clamp.
+    let sign   = (bits >> 15) & 1;
+    let exp    = (bits >> 10) & 0x1f;
+    let frac   = bits & 0x3ff;
+    let v: f32 = if exp == 0 {
+        if frac == 0 { 0.0 } else { (frac as f32 / 1024.0) * (2.0_f32.powi(-14)) }
+    } else if exp == 31 {
+        if sign == 0 { f32::INFINITY } else { f32::NEG_INFINITY }
+    } else {
+        let s = if sign == 1 { -1.0f32 } else { 1.0f32 };
+        s * (1.0 + frac as f32 / 1024.0) * (2.0_f32.powi(exp as i32 - 15))
+    };
+    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+fn decode_rgba16f(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let n = (width * height) as usize;
+    let mut rgba = vec![255u8; n * 4];
+    for i in 0..n.min(src.len() / 8) {
+        let s = i * 8;
+        let d = i * 4;
+        rgba[d]     = f16_to_u8(u16::from_le_bytes([src[s],     src[s + 1]])); // R
+        rgba[d + 1] = f16_to_u8(u16::from_le_bytes([src[s + 2], src[s + 3]])); // G
+        rgba[d + 2] = f16_to_u8(u16::from_le_bytes([src[s + 4], src[s + 5]])); // B
+        rgba[d + 3] = f16_to_u8(u16::from_le_bytes([src[s + 6], src[s + 7]])); // A
+    }
+    rgba
+}
+
+fn decode_rgba32f(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let n = (width * height) as usize;
+    let mut rgba = vec![255u8; n * 4];
+    for i in 0..n.min(src.len() / 16) {
+        let s = i * 16;
+        let d = i * 4;
+        let r = f32::from_le_bytes([src[s],      src[s+1],  src[s+2],  src[s+3]]);
+        let g = f32::from_le_bytes([src[s+4],    src[s+5],  src[s+6],  src[s+7]]);
+        let b = f32::from_le_bytes([src[s+8],    src[s+9],  src[s+10], src[s+11]]);
+        let a = f32::from_le_bytes([src[s+12],   src[s+13], src[s+14], src[s+15]]);
+        // Reinhard tone-map per channel so HDR values compress gracefully.
+        let tm = |v: f32| -> u8 { ((v / (v + 1.0)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8 };
+        rgba[d]     = tm(r);
+        rgba[d + 1] = tm(g);
+        rgba[d + 2] = tm(b);
+        rgba[d + 3] = (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    }
+    rgba
+}
+
+fn decode_r16f(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let n = (width * height) as usize;
+    let mut rgba = vec![255u8; n * 4];
+    for i in 0..n.min(src.len() / 2) {
+        let v = f16_to_u8(u16::from_le_bytes([src[i * 2], src[i * 2 + 1]]));
+        let d = i * 4;
+        rgba[d]     = v;
+        rgba[d + 1] = v;
+        rgba[d + 2] = v;
+    }
+    rgba
+}
+
+fn decode_r32f(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let n = (width * height) as usize;
+    let mut rgba = vec![255u8; n * 4];
+    for i in 0..n.min(src.len() / 4) {
+        let v = f32::from_le_bytes([src[i*4], src[i*4+1], src[i*4+2], src[i*4+3]]);
+        let v8 = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let d = i * 4;
+        rgba[d]     = v8;
+        rgba[d + 1] = v8;
+        rgba[d + 2] = v8;
+    }
+    rgba
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -534,14 +658,20 @@ pub fn decode_dds_to_rgba(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let src = &data[hdr.data_offset..];
 
     let rgba = match hdr.format {
-        DdsFormat::Bc1       => decode_bc1(src, w, h),
-        DdsFormat::Bc2       => decode_bc2(src, w, h),
-        DdsFormat::Bc3       => decode_bc3(src, w, h),
-        DdsFormat::Bc4       => decode_bc4(src, w, h),
-        DdsFormat::Bc5       => decode_bc5(src, w, h),
-        DdsFormat::Bc6h      => decode_bc6h(src, w, h),
-        DdsFormat::Bc7       => decode_bc7(src, w, h),
-        DdsFormat::Bgra32    => decode_bgra32(src, w, h),
+        DdsFormat::Bc1         => decode_bc1(src, w, h),
+        DdsFormat::Bc2         => decode_bc2(src, w, h),
+        DdsFormat::Bc3         => decode_bc3(src, w, h),
+        DdsFormat::Bc4         => decode_bc4(src, w, h),
+        DdsFormat::Bc5         => decode_bc5(src, w, h),
+        DdsFormat::Bc6h        => decode_bc6h(src, w, h),
+        DdsFormat::Bc7         => decode_bc7(src, w, h),
+        DdsFormat::Bgra32      => decode_bgra32(src, w, h),
+        DdsFormat::Rgba32      => decode_rgba32(src, w, h),
+        DdsFormat::Rgb24       => decode_rgb24(src, w, h),
+        DdsFormat::Rgba16F     => decode_rgba16f(src, w, h),
+        DdsFormat::Rgba32F     => decode_rgba32f(src, w, h),
+        DdsFormat::R16F        => decode_r16f(src, w, h),
+        DdsFormat::R32F        => decode_r32f(src, w, h),
         DdsFormat::Luminance8  => decode_luminance8(src, w, h),
         DdsFormat::Luminance16 => decode_luminance16(src, w, h),
     };
