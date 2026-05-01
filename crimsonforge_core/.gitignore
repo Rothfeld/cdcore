@@ -1,0 +1,4 @@
+target/
+Cargo.lock
+python/crimsonforge_core.pyi
+python/crimsonforge_core/__init__.pyi

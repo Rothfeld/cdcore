@@ -1,0 +1,31 @@
+[package]
+name = "cdfuse"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cdfuse"
+
+[dependencies]
+crimsonforge_core = { path = "../crimsonforge_core" }     # VFS, parsers, crypto, compression
+fuser = { version = "0.15", features = ["abi-7-21"] }    # FUSE filesystem; abi-7-21 enables READDIRPLUS
+libc = "0.2"                                              # uid/gid, EISDIR, ENOENT constants
+clap = { version = "4", features = ["derive"] }           # CLI argument parsing
+log = "0.4"                                               # logging facade
+env_logger = "0.11"                                       # RUST_LOG env-var log backend
+lru = "0.18"                                              # LRU decode cache with per-entry eviction
+memmap2 = "0.9"                                           # memory-mapped PAZ files — zero syscalls per read
+rayon = "1"                                               # dedicated thread pool for concurrent file decodes
+
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# Build with full optimisations but retain debug symbols for profiling.
+# Usage: cargo build --profile profiling
+[profile.profiling]
+inherits = "release"
+debug = true       # DWARF symbols → readable flamegraph frames
+lto = false        # faster incremental builds during profiling iterations
