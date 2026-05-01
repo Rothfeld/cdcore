@@ -1,11 +1,8 @@
 use std::fs;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use clap::Parser;
-use rayon::prelude::*;
 use walkdir::WalkDir;
 
 use crimsonforge_core::formats::dds::decode_dds_to_rgba;
@@ -41,18 +38,17 @@ fn main() {
             .collect()
     };
 
-    let total  = files.len();
-    let done   = Arc::new(AtomicUsize::new(0));
-    let errors = Arc::new(AtomicUsize::new(0));
+    let total = files.len();
+    let mut errors = 0usize;
 
     eprintln!("Found {total} DDS files — generating {}px thumbnails ...", args.size);
 
-    files.into_par_iter().for_each(|path| {
-        let rel  = path.strip_prefix(&input).unwrap_or(&path);
+    for (n, path) in files.iter().enumerate() {
+        let rel  = path.strip_prefix(&input).unwrap_or(path);
         let dest = out_dir.join(rel).with_extension("png");
 
         let result = (|| -> Result<(), String> {
-            let data = fs::read(&path).map_err(|e| e.to_string())?;
+            let data = fs::read(path).map_err(|e| e.to_string())?;
             let (w, h, rgba) = decode_dds_to_rgba(&data).map_err(|e| e.to_string())?;
             let thumb = thumbnail(&rgba, w, h, args.size);
             if let Some(p) = dest.parent() { fs::create_dir_all(p).map_err(|e| e.to_string())?; }
@@ -61,16 +57,15 @@ fn main() {
 
         if let Err(e) = result {
             eprintln!("error: {}: {e}", path.display());
-            errors.fetch_add(1, Ordering::Relaxed);
+            errors += 1;
         }
-        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+        let n = n + 1;
         if n % 1000 == 0 || n == total {
-            eprintln!("  {n}/{total}  errors={}", errors.load(Ordering::Relaxed));
+            eprintln!("  {n}/{total}  errors={errors}");
         }
-    });
+    }
 
-    let err = errors.load(Ordering::Relaxed);
-    eprintln!("Done. {} written, {} errors.", total - err, err);
+    eprintln!("Done. {} written, {} errors.", total - errors, errors);
 }
 
 fn thumbnail(rgba: &[u8], sw: u32, sh: u32, size: u32) -> Vec<u8> {
