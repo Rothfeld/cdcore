@@ -329,6 +329,7 @@ impl PyParsedAnimation {
     #[getter] fn fps(&self)           -> f32   { self.inner.fps }
     #[getter] fn metadata_tags(&self) -> &str  { &self.inner.metadata_tags }
     #[getter] fn is_character(&self)  -> bool  { self.inner.variant == animation::AnimVariant::Character }
+    #[getter] fn embedded_tracks_absolute(&self) -> bool { self.inner.embedded_tracks_absolute }
 
     /// keyframes[frame_idx][bone_idx] -> Keyframe
     fn get_keyframe(&self, py: Python<'_>, frame: usize, bone: usize) -> PyResult<Py<PyAny>> {
@@ -845,6 +846,92 @@ fn decode_dds_to_rgba(py: Python<'_>, data: Vec<u8>) -> PyResult<(u32, u32, Py<P
     Ok((w, h, PyBytes::new(py, &rgba).unbind()))
 }
 
+// ── PABC morph-target ────────────────────────────────────────────────────────
+
+#[gen_stub_pyclass]
+#[pyclass(name = "PabcFile")]
+pub struct PyPabcFile {
+    inner: crate::formats::pabc::PabcFile,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyPabcFile {
+    #[getter] fn version(&self)         -> u8  { self.inner.version }
+    #[getter] fn count(&self)           -> u32 { self.inner.count }
+    #[getter] fn n_floats(&self)        -> usize { self.inner.n_floats() }
+    #[getter] fn row_floats_hint(&self) -> usize { self.inner.row_floats_hint() }
+    #[getter] fn in_range_ratio(&self)  -> f32  { self.inner.in_range_ratio() }
+    #[getter] fn floats(&self)          -> Vec<f32> { self.inner.floats.clone() }
+    #[getter] fn trailer(&self, py: Python<'_>) -> Py<PyBytes> {
+        PyBytes::new(py, &self.inner.trailer).unbind()
+    }
+    fn serialize(&self, py: Python<'_>) -> Py<PyBytes> {
+        PyBytes::new(py, &self.inner.serialize()).unbind()
+    }
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn parse_pabc(data: Vec<u8>) -> PyResult<PyPabcFile> {
+    let inner = crate::formats::pabc::parse(&data).map_err(to_pyerr)?;
+    Ok(PyPabcFile { inner })
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn is_par_file(data: Vec<u8>) -> bool {
+    crate::formats::pabc::is_par_file(&data)
+}
+
+// ── PABC skin palette ─────────────────────────────────────────────────────────
+
+#[gen_stub_pyclass]
+#[pyclass(name = "PabcSkinRecord")]
+#[derive(Clone)]
+pub struct PyPabcSkinRecord {
+    inner: crate::formats::pabc_skin::PabcSkinRecord,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyPabcSkinRecord {
+    #[getter] fn record_index(&self)    -> usize { self.inner.record_index }
+    #[getter] fn bone_hash_24(&self)    -> u32   { self.inner.bone_hash_24 }
+    #[getter] fn pab_bone_index(&self)  -> i32   { self.inner.pab_bone_index }
+    #[getter] fn flag_byte(&self)       -> u8    { self.inner.flag_byte }
+}
+
+#[gen_stub_pyclass]
+#[pyclass(name = "PabcSkinPalette")]
+pub struct PyPabcSkinPalette {
+    inner: crate::formats::pabc_skin::PabcSkinPalette,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyPabcSkinPalette {
+    #[getter] fn path(&self)         -> &str  { &self.inner.path }
+    #[getter] fn record_count(&self) -> usize { self.inner.record_count }
+    #[getter] fn records(&self) -> Vec<PyPabcSkinRecord> {
+        self.inner.records.iter().map(|r| PyPabcSkinRecord { inner: r.clone() }).collect()
+    }
+    fn slot_to_pab(&self, slot: usize) -> i32 {
+        self.inner.slot_to_pab(slot)
+    }
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn parse_skin_pabc(
+    data: Vec<u8>,
+    pab_hashes: Vec<u32>,
+    filename: Option<&str>,
+) -> PyPabcSkinPalette {
+    let inner = crate::formats::pabc_skin::parse_skin(&data, &pab_hashes, filename.unwrap_or(""));
+    PyPabcSkinPalette { inner }
+}
+
 pyo3_stub_gen::define_stub_info_gatherer!(stub_info);
 
 // ── Module definition ─────────────────────────────────────────────────────────
@@ -868,6 +955,9 @@ pub fn crimsonforge_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParsedPrefab>()?;
     m.add_class::<PyPalocData>()?;
     m.add_class::<PyPabgbTable>()?;
+    m.add_class::<PyPabcFile>()?;
+    m.add_class::<PyPabcSkinRecord>()?;
+    m.add_class::<PyPabcSkinPalette>()?;
     m.add_class::<PyModifiedFile>()?;
     m.add_class::<PyRepackResult>()?;
     m.add_class::<PyRepackEngine>()?;
@@ -901,6 +991,11 @@ pub fn crimsonforge_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // DDS
     m.add_function(wrap_pyfunction!(decode_dds_to_rgba, m)?)?;
+
+    // PABC
+    m.add_function(wrap_pyfunction!(parse_pabc, m)?)?;
+    m.add_function(wrap_pyfunction!(is_par_file, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_skin_pabc, m)?)?;
 
     // Repack
     m.add_function(wrap_pyfunction!(verify_chain, m)?)?;
