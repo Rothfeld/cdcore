@@ -363,7 +363,15 @@ impl SharedFs {
                 crypto::decrypt_inplace(&mut data, bn);
             }
             if entry.compressed() && entry.compression_type() != 0 {
-                data = compression::decompress(&data, entry.orig_size as usize, entry.compression_type()).ok()?;
+                // Fall back to raw bytes if decompression fails: some files have
+                // comp_size != orig_size in PAMT but are not actually compressed
+                // (e.g. cd_ancient_altarmarble_01.pam, orig_size=159012 but data
+                // starts with PAR magic and is valid uncompressed).
+                if let Ok(d) = compression::decompress(&data, entry.orig_size as usize, entry.compression_type()) {
+                    data = d;
+                } else {
+                    warn!("decode {path}: decompression failed, serving raw bytes ({} B)", data.len());
+                }
             }
             Some(Arc::from(data))
         });
