@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "cdcore"
 version = "0.1.0"
-description = "High-performance Rust core for CrimsonForge — VFS, parsers, crypto, repack"
+description = "Rust core library for CrimsonForge: VFS, parsers, crypto, repack"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
