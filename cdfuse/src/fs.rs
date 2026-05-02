@@ -53,6 +53,18 @@ const MAX_CACHE_ENTRIES: usize   = 2048;
 const MAX_CACHED_BYTES:  usize   = 512 * 1024 * 1024;
 const SLOW_MS:           u128    = 200;  // log warning if a callback takes longer than this
 
+// Returned for absent paths instead of reply.error(ENOENT).
+// nodeid=0 tells the kernel to cache the "not found" result for TTL seconds
+// (FUSE negative dentry caching), eliminating repeated lookups for the same
+// absent name (e.g. .Trash, .sh_thumbnails) that otherwise saturate the
+// session thread.
+const ABSENT_ATTR: FileAttr = FileAttr {
+    ino: 0, size: 0, blocks: 0,
+    atime: UNIX_EPOCH, mtime: UNIX_EPOCH, ctime: UNIX_EPOCH, crtime: UNIX_EPOCH,
+    kind: FileType::RegularFile,
+    perm: 0, nlink: 0, uid: 0, gid: 0, rdev: 0, blksize: 0, flags: 0,
+};
+
 macro_rules! timed {
     ($label:expr, $body:expr) => {{
         let _t = Instant::now();
@@ -595,8 +607,10 @@ impl Filesystem for CdFs {
                 return;
             }
         }
-        info!("<< lookup {child:?} → ENOENT {}ms", _t.elapsed().as_millis());
-        reply.error(ENOENT);
+        // Negative cache: nodeid=0 + TTL tells the kernel to cache "not found"
+        // for 60s and stop re-asking. Eliminates .Trash/.sh_thumbnails spam.
+        info!("<< lookup {child:?} → absent (neg-cache) {}ms", _t.elapsed().as_millis());
+        reply.entry(&TTL, &ABSENT_ATTR, 0);
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
