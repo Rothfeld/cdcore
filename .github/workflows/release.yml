@@ -40,10 +40,11 @@ jobs:
           # resulting wheel runs on any Linux distro, not just the runner's
           # glibc version.  No effect on Windows/macOS.
           manylinux: auto
-          # Tell maturin-action which Python versions to build for. It translates
-          # these to /opt/python/cpXXX paths inside the manylinux container so
-          # maturin can find them (the container doesn't have a bare 'python3').
-          python-version: "3.10 3.11 3.12 3.13"
+          # The manylinux container has Python at /opt/python/cpXXX-cpXXX/bin/
+          # but no bare 'python3' in PATH. Add a known version so maturin can
+          # find an interpreter to package the Python source files.
+          before-script-linux: |
+            export PATH="/opt/python/cp312-cp312/bin:$PATH"
 
       - uses: actions/upload-artifact@v4
         with:
