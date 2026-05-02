@@ -38,8 +38,19 @@ struct Args {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    // In TUI mode log to file so output doesn't corrupt the display.
+    // In non-interactive mode log to stderr as usual.
+    let log_to_tui = args.unmount.is_none() && std::io::stdin().is_terminal();
+    if log_to_tui {
+        let f = std::fs::File::create("/tmp/cdfuse.log")
+            .expect("cannot open /tmp/cdfuse.log");
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .target(env_logger::Target::Pipe(Box::new(f)))
+            .init();
+    } else {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    }
 
     // cdfuse --unmount <mountpoint>: commit pending writes and unmount.
     if let Some(ref mp) = args.unmount {
