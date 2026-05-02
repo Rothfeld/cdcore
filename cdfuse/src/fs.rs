@@ -489,14 +489,11 @@ impl SharedFs {
                     true
                 };
                 if should_add {
-                    // Use virt_ext for the listing name so file managers pick
-                    // the right MIME type (e.g. .png instead of .dds).
-                    let virt_name = if vdir.filter_ext == vdir.virt_ext {
+                    // Append suffix to the full source filename (e.g. "" or ".png").
+                    let virt_name = if vdir.suffix.is_empty() {
                         name.clone()
                     } else {
-                        format!("{}{}",
-                            &name[..name.len() - vdir.filter_ext.len()],
-                            vdir.virt_ext)
+                        format!("{name}{}", vdir.suffix)
                     };
                     let vpath = Self::child_path(path, OsStr::new(&virt_name));
                     let vino  = ino_for(&vpath);
