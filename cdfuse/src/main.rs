@@ -52,7 +52,37 @@ fn main() {
         }
     }
 
+    // Block SIGTERM before any thread is spawned (rayon pool, fuser session)
+    // so all threads inherit the mask and sigwait below receives it exclusively.
+    // Ctrl-C (SIGINT) keeps default behaviour: abort immediately, no repack.
+    // SIGTERM: graceful — fusermount -u triggers destroy() which repacks.
+    unsafe {
+        let mut mask: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut mask);
+        libc::sigaddset(&mut mask, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
+    }
+
     let fs = fs::CdFs::new(vfs, args.readonly);
+
+    // Graceful shutdown thread: waits for SIGTERM, then unmounts cleanly.
+    {
+        let mount = args.mount.clone();
+        std::thread::spawn(move || {
+            unsafe {
+                let mut mask: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut mask);
+                libc::sigaddset(&mut mask, libc::SIGTERM);
+                let mut sig: libc::c_int = 0;
+                libc::sigwait(&mask, &mut sig);
+            }
+            info!("SIGTERM — graceful unmount, repacking pending writes");
+            std::process::Command::new("fusermount")
+                .args(["-u", &mount])
+                .status()
+                .ok();
+        });
+    }
 
     let mut options = vec![
         fuser::MountOption::FSName("cdfuse".to_string()),
@@ -61,18 +91,6 @@ fn main() {
     ];
     if args.readonly {
         options.push(fuser::MountOption::RO);
-    }
-
-    // Ctrl-C: call fusermount -u so the kernel closes the FUSE fd, mount2()
-    // returns, and fuser calls destroy() — which flushes pending writes.
-    {
-        let mount = args.mount.clone();
-        ctrlc::set_handler(move || {
-            std::process::Command::new("fusermount")
-                .args(["-u", &mount])
-                .status()
-                .ok();
-        }).expect("failed to set Ctrl-C handler");
     }
 
     info!("mounting {} at {} ({})", args.packages, args.mount,
