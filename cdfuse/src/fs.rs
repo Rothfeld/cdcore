@@ -882,11 +882,6 @@ impl Filesystem for CdFs {
         };
         let child = SharedFs::child_path(&parent_path, name);
 
-        if virtual_files::resolve_virtual_dir(&child).is_some() {
-            reply.error(libc::EPERM);
-            return;
-        }
-
         let ino = self.ensure_path(&child, false);
         // New file starts empty; caller will write full content.
         self.shared.write_overlay.lock().unwrap().entry(ino).or_insert_with(Vec::new);
@@ -967,23 +962,30 @@ impl Filesystem for CdFs {
         };
         let child = SharedFs::child_path(&parent_path, name);
 
+        let ino = ino_for(&child);
+
         if virtual_files::resolve(&child).is_some() {
-            reply.error(libc::EPERM);
+            // Virtual file: exists only in-memory; just discard any overlay data.
+            self.shared.write_overlay.lock().unwrap().remove(&ino);
+            self.shared.write_mtimes.lock().unwrap().remove(&ino);
+            self.shared.pending_paths.lock().unwrap().remove(&ino);
+            self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
+            info!("unlink {child:?} (virtual, overlay discarded)");
+            reply.ok();
             return;
         }
-        if self.shared.vfs.lookup(&child).is_none() {
+        if self.shared.vfs.lookup(&child).is_none()
+            && !self.paths.get(&ino).is_some_and(|(_, d)| !*d)
+        {
             reply.error(ENOENT);
             return;
         }
 
         self.shared.vfs.remove_entry(&child);
-
-        let ino = ino_for(&child);
         self.shared.decode_cache.lock().unwrap().pop(&ino);
         self.shared.write_overlay.lock().unwrap().remove(&ino);
         self.shared.write_mtimes.lock().unwrap().remove(&ino);
         self.shared.pending_paths.lock().unwrap().remove(&ino);
-        // Invalidate parent dir cache so the next listing rebuilds without this entry.
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
 
         info!("unlink {child:?} (removed from VFS index; PAZ unchanged)");
