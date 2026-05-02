@@ -49,7 +49,7 @@ use crate::virtual_files;
 
 const TTL:               Duration = Duration::from_secs(60);
 const ROOT_INO:          u64     = 1;
-const MAX_CACHE_ENTRIES: usize   = 2048;
+const MAX_CACHE_ENTRIES: usize   = 131_072;
 const MAX_CACHED_BYTES:  usize   = 512 * 1024 * 1024;
 const SLOW_MS:           u128    = 200;  // log warning if a callback takes longer than this
 
