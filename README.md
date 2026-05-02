@@ -4,6 +4,15 @@
 
 Rust library exposed to Python via [PyO3](https://pyo3.rs).
 
+Designed to drop into [CrimsonForge](https://github.com/hzeemr/crimsonforge) as a
+faster backend. Add one line to the top of `main.py` and the VFS, DDS decoder,
+and checksum engine are replaced with the Rust implementations — no other changes
+required:
+
+```python
+import cdcore  # monkeypatches core.vfs_manager and core.dds_reader
+```
+
 - **VFS** -- unified read/write access to 1.4M+ game files across PAZ archives
 - **Parsers** -- PAM/PAC/PAMLOD meshes, PAA animations, PAB skeletons, PABC morph targets, PABC skin palettes, HKX physics, NAV navigation meshes, PALOC localisation, PABGB game data tables, prefabs
 - **DDS decode** -- BC1-BC7, BC6H HDR, BGRA32, Luminance, float formats, DX10 extended header
@@ -17,7 +26,7 @@ cd cdcore
 ./build.sh
 ```
 
-**Python usage:**
+**Standalone Python usage:**
 ```python
 import cdcore as cf
 
@@ -37,15 +46,6 @@ w, h, rgba = cf.decode_dds_to_rgba(dds_bytes)
 
 morph   = cf.parse_pabc(pabc_bytes)
 palette = cf.parse_skin_pabc(pabc_bytes, pab_hashes, "mesh.pabc")
-```
-
-**Transparent Python integration:**
-
-```python
-import cdcore  # inject first
-
-from core.vfs_manager import VfsManager  # -> _RustVfsManager
-from core.dds_reader import decode_dds_to_rgba  # -> Rust decoder
 ```
 
 ---
