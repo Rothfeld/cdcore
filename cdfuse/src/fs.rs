@@ -658,7 +658,7 @@ impl Filesystem for CdFs {
 
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let _t = Instant::now();
-        info!(">> lookup parent={parent} name={name:?}");
+        debug!(">> lookup parent={parent} name={name:?}");
         self.drain();
         let parent_path = match self.path_of(parent) {
             Some(p) => p.to_string(),
@@ -669,7 +669,7 @@ impl Filesystem for CdFs {
         if let Some(entry) = self.shared.vfs.lookup(&child) {
             let ino  = self.ensure_path(&child, false);
             let attr = self.shared.file_attr(ino, entry.orig_size as u64);
-            info!("<< lookup {child:?} -> file {}ms", _t.elapsed().as_millis());
+            debug!("<< lookup {child:?} -> file {}ms", _t.elapsed().as_millis());
             reply.entry(&TTL, &attr, 0);
             return;
         }
@@ -678,7 +678,7 @@ impl Filesystem for CdFs {
         {
             let ino  = self.ensure_path(&child, true);
             let attr = self.shared.dir_attr(ino);
-            info!("<< lookup {child:?} -> dir {}ms", _t.elapsed().as_millis());
+            debug!("<< lookup {child:?} -> dir {}ms", _t.elapsed().as_millis());
             reply.entry(&TTL, &attr, 0);
             return;
         }
@@ -693,7 +693,7 @@ impl Filesystem for CdFs {
                     .or_else(|| self.shared.vfs.lookup(&vf.source_path).map(|e| e.orig_size as u64))
                     .unwrap_or(0);
                 let attr = self.shared.file_attr(ino, size);
-                info!("<< lookup {child:?} -> virtual file {}ms", _t.elapsed().as_millis());
+                debug!("<< lookup {child:?} -> virtual file {}ms", _t.elapsed().as_millis());
                 reply.entry(&Duration::ZERO, &attr, 0);
                 return;
             }
@@ -705,7 +705,7 @@ impl Filesystem for CdFs {
             if real_exists {
                 let ino  = self.ensure_path(&child, true);
                 let attr = self.shared.dir_attr(ino);
-                info!("<< lookup {child:?} -> virtual dir {}ms", _t.elapsed().as_millis());
+                debug!("<< lookup {child:?} -> virtual dir {}ms", _t.elapsed().as_millis());
                 reply.entry(&TTL, &attr, 0);
                 return;
             }
@@ -716,34 +716,34 @@ impl Filesystem for CdFs {
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
             let attr = self.shared.file_attr(ino, size);
-            info!("<< lookup {child:?} -> overlay file {}ms", _t.elapsed().as_millis());
+            debug!("<< lookup {child:?} -> overlay file {}ms", _t.elapsed().as_millis());
             reply.entry(&Duration::ZERO, &attr, 0);
             return;
         }
         // Negative cache: nodeid=0 + TTL tells the kernel to cache "not found"
         // for 60s and stop re-asking. Eliminates .Trash/.sh_thumbnails spam.
-        info!("<< lookup {child:?} -> absent (neg-cache) {}ms", _t.elapsed().as_millis());
+        debug!("<< lookup {child:?} -> absent (neg-cache) {}ms", _t.elapsed().as_millis());
         reply.entry(&TTL, &ABSENT_ATTR, 0);
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
-        info!(">> getattr ino={ino}");
+        debug!(">> getattr ino={ino}");
         let _t = Instant::now();
         self.drain();
         if self.is_dir(ino) {
-            info!("<< getattr ino={ino} -> dir {}ms", _t.elapsed().as_millis());
+            debug!("<< getattr ino={ino} -> dir {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.dir_attr(ino));
             return;
         }
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
-            None    => { info!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis()); reply.error(ENOENT); return; }
+            None    => { debug!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis()); reply.error(ENOENT); return; }
         };
         if let Some(e) = self.shared.vfs.lookup(&path) {
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64)
                 .unwrap_or(e.orig_size as u64);
-            info!("<< getattr ino={ino} -> file size={size} {}ms", _t.elapsed().as_millis());
+            debug!("<< getattr ino={ino} -> file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.file_attr(ino, size));
         } else if let Some(vf) = virtual_files::resolve(&path) {
             // Virtual file check must come before overlay-only: virtual files
@@ -760,16 +760,16 @@ impl Filesystem for CdFs {
                     (est, Duration::ZERO)
                 }
             };
-            info!("<< getattr ino={ino} -> virtual size={size} {}ms", _t.elapsed().as_millis());
+            debug!("<< getattr ino={ino} -> virtual size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&ttl, &self.shared.file_attr(ino, size));
         } else if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
             // Overlay-only file (created via create(), not yet in VFS).
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
-            info!("<< getattr ino={ino} -> overlay file size={size} {}ms", _t.elapsed().as_millis());
+            debug!("<< getattr ino={ino} -> overlay file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, size));
         } else {
-            info!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis());
+            debug!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis());
             reply.error(ENOENT);
         }
     }
@@ -781,7 +781,7 @@ impl Filesystem for CdFs {
                _crtime: Option<std::time::SystemTime>, _chgtime: Option<std::time::SystemTime>,
                _bkuptime: Option<std::time::SystemTime>, _flags: Option<u32>,
                reply: ReplyAttr) {
-        info!(">> setattr ino={ino} size={size:?}");
+        debug!(">> setattr ino={ino} size={size:?}");
         let _t = Instant::now();
         self.drain();
         if self.is_dir(ino) { reply.error(libc::EISDIR); return; }
@@ -821,7 +821,7 @@ impl Filesystem for CdFs {
     fn write(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
              data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>,
              reply: fuser::ReplyWrite) {
-        info!(">> write ino={ino} offset={offset} len={}", data.len());
+        debug!(">> write ino={ino} offset={offset} len={}", data.len());
         self.drain();
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
@@ -874,7 +874,7 @@ impl Filesystem for CdFs {
 
     fn create(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr,
               _mode: u32, _umask: u32, _flags: i32, reply: fuser::ReplyCreate) {
-        info!(">> create parent={parent} name={name:?}");
+        debug!(">> create parent={parent} name={name:?}");
         self.drain();
         let parent_path = match self.path_of(parent) {
             Some(p) => p.to_string(),
@@ -891,7 +891,7 @@ impl Filesystem for CdFs {
 
     fn rename(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr,
               newparent: u64, newname: &OsStr, _flags: u32, reply: fuser::ReplyEmpty) {
-        info!(">> rename {name:?} -> {newname:?}");
+        debug!(">> rename {name:?} -> {newname:?}");
         self.drain();
         let src_parent = match self.path_of(parent) {
             Some(p) => p.to_string(),
@@ -920,20 +920,20 @@ impl Filesystem for CdFs {
         // Invalidate dir caches so ls reflects the change.
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&src_parent));
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&dst_parent));
-        info!("<< rename {src:?} -> {dst:?} ok");
+        debug!("<< rename {src:?} -> {dst:?} ok");
         reply.ok();
     }
 
     fn release(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _flags: i32,
                _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
-        info!(">> release ino={ino}");
+        debug!(">> release ino={ino}");
         self.drain();
         // Overlay stays alive until destroy() -- no repack here.
         // Update decode cache so re-opens see current content.
         if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino) {
             self.shared.cache_put(ino, Arc::from(data.as_slice()));
         }
-        info!("<< release ino={ino}");
+        debug!("<< release ino={ino}");
         reply.ok();
     }
 
@@ -994,7 +994,7 @@ impl Filesystem for CdFs {
 
     fn readdirplus(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
                    reply: ReplyDirectoryPlus) {
-        info!(">> readdirplus ino={ino} offset={offset}");
+        debug!(">> readdirplus ino={ino} offset={offset}");
         self.drain();
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
@@ -1005,7 +1005,7 @@ impl Filesystem for CdFs {
         };
         let slot = self.shared.dir_slot(ino);
         if slot.get().is_some() {
-            info!("<< readdirplus {path:?} offset={offset} -> cache hit");
+            debug!("<< readdirplus {path:?} offset={offset} -> cache hit");
             serve_readdirplus(slot.get().unwrap(), offset, reply);
             return;
         }
@@ -1014,7 +1014,7 @@ impl Filesystem for CdFs {
         rayon::spawn(move || {
             let t = Instant::now();
             slot.get_or_init(|| shared.build_dir_entries(ino, &path));
-            info!("<< readdirplus {path:?} built in {}ms, serving offset={offset}",
+            debug!("<< readdirplus {path:?} built in {}ms, serving offset={offset}",
                   t.elapsed().as_millis());
             serve_readdirplus(slot.get().unwrap(), offset, reply);
         });
@@ -1022,7 +1022,7 @@ impl Filesystem for CdFs {
 
     fn readdir(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
                mut reply: ReplyDirectory) {
-        info!(">> readdir ino={ino} offset={offset}");
+        debug!(">> readdir ino={ino} offset={offset}");
         self.drain();
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
@@ -1031,7 +1031,7 @@ impl Filesystem for CdFs {
         let slot = self.shared.dir_slot(ino);
         let t = Instant::now();
         slot.get_or_init(|| self.shared.build_dir_entries(ino, &path));
-        info!("<< readdir {path:?} built/cached in {}ms", t.elapsed().as_millis());
+        debug!("<< readdir {path:?} built/cached in {}ms", t.elapsed().as_millis());
         let entries = slot.get().unwrap();
         for (i, e) in entries.iter().enumerate().skip(offset as usize) {
             if reply.add(e.ino, (i + 1) as i64, e.attr.kind, &e.name) { break; }
@@ -1040,7 +1040,7 @@ impl Filesystem for CdFs {
     }
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
-        info!(">> open ino={ino}");
+        debug!(">> open ino={ino}");
         self.drain();
         if self.is_dir(ino) {
             reply.error(libc::EISDIR);
@@ -1059,19 +1059,19 @@ impl Filesystem for CdFs {
                 pool.spawn(move || {
                     let t = Instant::now();
                     shared.decode(ino, &path);
-                    info!("<< open {path:?} virtual decode done {}ms", t.elapsed().as_millis());
+                    debug!("<< open {path:?} virtual decode done {}ms", t.elapsed().as_millis());
                     reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
                 });
                 return;
             }
         }
-        info!("<< open ino={ino} -> ok");
+        debug!("<< open ino={ino} -> ok");
         reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
     }
 
     fn read(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
             size: u32, _flags: i32, _lock: Option<u64>, reply: ReplyData) {
-        info!(">> read ino={ino} offset={offset} size={size}");
+        debug!(">> read ino={ino} offset={offset} size={size}");
         self.drain();
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
