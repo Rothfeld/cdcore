@@ -24,7 +24,7 @@ cd cdcore
 FUSE filesystem that mounts Crimson Desert archives as a Linux directory tree.
 Files are transparently decrypted and decompressed on access.
 Supports read-write: drag-and-drop files in, edit files in place, changes
-are repacked into the PAZ archives on unmount.
+are repacked into the PAZ archives through the TUI.
 
 **Requirements:** `libfuse3`, `user_allow_other` in `/etc/fuse.conf`.
 

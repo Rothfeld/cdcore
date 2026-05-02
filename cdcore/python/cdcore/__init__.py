@@ -12,12 +12,36 @@ class _RustVfsManager:
     Injected into sys.modules as core.vfs_manager so every existing
     'from core.vfs_manager import VfsManager' gets the Rust backend
     without any changes to the Python project.
+
+    Unknown attributes fall through to a lazily-loaded instance of the
+    original Python VfsManager so newer CrimsonForge code that calls
+    methods not yet implemented here keeps working.
     """
 
     def __init__(self, packages_path):
         from .cdcore import VfsManager as _RustVM
         self._packages_path = Path(packages_path)
         self._rust = _RustVM(str(self._packages_path))
+        self._py_fallback = None
+
+    def _get_fallback(self):
+        if self._py_fallback is None:
+            sys.modules.pop("core.vfs_manager", None)
+            import importlib
+            _real_mod = importlib.import_module("core.vfs_manager")
+            self._py_fallback = _real_mod.VfsManager(str(self._packages_path))
+            sys.modules["core.vfs_manager"] = sys.modules.get("cdcore.vfs_shim", self)
+        return self._py_fallback
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        import warnings
+        warnings.warn(
+            f"cdcore._RustVfsManager: '{name}' not implemented, falling back to Python",
+            stacklevel=2,
+        )
+        return getattr(self._get_fallback(), name)
 
     def load_pamt(self, group_dir: str):
         self._rust.load_group(group_dir)
