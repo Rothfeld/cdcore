@@ -439,46 +439,7 @@ impl SharedFs {
         entries
     }
 
-    /// Repack one pending overlay entry asynchronously; sends `reply` when done.
-    /// Removes the entry from the overlay before spawning so a concurrent fsync
-    /// on the same ino does not double-repack.
-    fn flush_ino(shared: Arc<SharedFs>, ino: u64, path: String,
-                 data: Vec<u8>, reply: fuser::ReplyEmpty) {
-        let entry = match shared.vfs.lookup(&path) {
-            Some(e) => e,
-            None    => { reply.ok(); return; }
-        };
-        let group_dir = Path::new(&entry.paz_file)
-            .parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
-            .unwrap_or("").to_string();
-        let pamt_data = match shared.vfs.get_pamt(&group_dir) {
-            Some(p) => p,
-            None => {
-                warn!("flush {path}: no pamt for group {group_dir}");
-                reply.ok(); return;
-            }
-        };
-
-        shared.cache_put(ino, Arc::from(data.clone()));
-
-        let papgt_path = shared.papgt_path.clone();
-        let pool = &shared.decode_pool as *const rayon::ThreadPool;
-        let pool = unsafe { &*pool };
-        pool.spawn(move || {
-            let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir };
-            match shared.repack_engine.repack(vec![mf], &papgt_path, true) {
-                Ok(r) if r.success => {
-                    info!("repack {path}: ok");
-                    shared.paz_maps.lock().unwrap().remove(&entry.paz_file);
-                }
-                Ok(r)  => warn!("repack {path}: errors: {:?}", r.errors),
-                Err(e) => warn!("repack {path}: failed: {e}"),
-            }
-            reply.ok();
-        });
-    }
-
-    /// Synchronous repack — used in destroy() where there is no reply to defer.
+    /// Synchronous repack — called from destroy() on unmount.
     fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
         let entry = match self.vfs.lookup(path) {
             Some(e) => e,
@@ -748,17 +709,9 @@ impl Filesystem for CdFs {
         reply.ok();
     }
 
-    fn fsync(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _datasync: bool,
+    fn fsync(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _datasync: bool,
              reply: fuser::ReplyEmpty) {
-        self.drain();
-        let pending = self.shared.write_overlay.lock().unwrap().remove(&ino);
-        let Some(data) = pending else { reply.ok(); return; };
-        let path = match self.path_of(ino) {
-            Some(p) => p.to_string(),
-            None    => { reply.ok(); return; }
-        };
-        info!("fsync {path:?} — repacking");
-        SharedFs::flush_ino(Arc::clone(&self.shared), ino, path, data, reply);
+        reply.ok();
     }
 
     fn destroy(&mut self) {
