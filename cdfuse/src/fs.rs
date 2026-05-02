@@ -464,6 +464,25 @@ impl SharedFs {
 
     /// Synchronous repack — called from destroy() on unmount.
     fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
+        // Virtual file: convert JSONL back to binary and repack via source path.
+        if let Some(vf) = virtual_files::resolve(path) {
+            match vf.kind {
+                virtual_files::VirtualKind::PalocJson => {
+                    match virtual_files::parse_paloc_jsonl(&data) {
+                        Some(binary) => {
+                            let src_ino = ino_for(&vf.source_path);
+                            info!("flush {path}: paloc JSONL -> {}B binary, repacking {}",
+                                  binary.len(), vf.source_path);
+                            self.flush_ino_sync(src_ino, &vf.source_path, binary);
+                        }
+                        None => warn!("flush {path}: paloc JSONL parse failed, skipping"),
+                    }
+                }
+                _ => warn!("flush {path}: write-back not implemented for this virtual format"),
+            }
+            return;
+        }
+
         let entry = match self.vfs.lookup(path) {
             Some(e) => e,
             None    => return,
@@ -722,9 +741,11 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        if virtual_files::resolve(&path).is_some() {
-            reply.error(libc::EROFS);
-            return;
+        if let Some(vf) = virtual_files::resolve(&path) {
+            match vf.kind {
+                virtual_files::VirtualKind::PalocJson => {} // write-back supported
+                _ => { reply.error(libc::EROFS); return; }
+            }
         }
         // Allow writes to VFS-backed files and to overlay-only files (created
         // via create() but not yet in the VFS, e.g. GIO temp files).

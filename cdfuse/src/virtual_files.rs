@@ -19,7 +19,7 @@
 //!   resolve_virtual_dir() -> Some if path is a virtual directory
 //!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
-use crimsonforge_core::formats::data::{parse_paloc, parse_pabgb, FieldValue};
+use crimsonforge_core::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
 use crimsonforge_core::formats::scene::parse_prefab;
 use crimsonforge_core::formats::animation::parse_paa_metabin;
 use crimsonforge_core::formats::physics::parse_nav;
@@ -213,6 +213,54 @@ pub fn render_nav(data: &[u8], path: &str) -> Option<Vec<u8>> {
         out.push_str("}\n");
     }
     Some(out.into_bytes())
+}
+
+// ── Write-back: JSONL -> binary ───────────────────────────────────────────────
+
+/// Parse PALOC JSONL (one `{"key":…,"value":…}` per line) back to binary.
+pub fn parse_paloc_jsonl(data: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(data).ok()?;
+    let mut entries = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let key   = extract_json_field(line, "\"key\"")?;
+        let value = extract_json_field(line, "\"value\"")?;
+        entries.push(PalocEntry { key, value, key_offset: 0, value_offset: 0 });
+    }
+    Some(serialize_paloc(&entries))
+}
+
+/// Extract the string value of a named field from a flat JSON object line.
+fn extract_json_field(line: &str, field: &str) -> Option<String> {
+    let pos    = line.find(field)?;
+    let after  = &line[pos + field.len()..];
+    let colon  = after.find(':')? + 1;
+    parse_json_string(after[colon..].trim_start())
+}
+
+fn parse_json_string(s: &str) -> Option<String> {
+    if !s.starts_with('"') { return None; }
+    let mut out   = String::new();
+    let mut chars = s[1..].chars();
+    loop {
+        match chars.next()? {
+            '"'  => return Some(out),
+            '\\' => match chars.next()? {
+                '"'  => out.push('"'),
+                '\\' => out.push('\\'),
+                'n'  => out.push('\n'),
+                'r'  => out.push('\r'),
+                't'  => out.push('\t'),
+                'u'  => {
+                    let hex: String = (0..4).filter_map(|_| chars.next()).collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?)
+                }
+                c    => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
 }
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────
