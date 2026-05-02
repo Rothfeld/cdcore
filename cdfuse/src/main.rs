@@ -1,5 +1,5 @@
 use std::io::IsTerminal;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use log::info;
@@ -39,8 +39,6 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    // In TUI mode log to file so output doesn't corrupt the display.
-    // In non-interactive mode log to stderr as usual.
     let log_to_tui = args.unmount.is_none() && std::io::stdin().is_terminal();
     if log_to_tui {
         let f = std::fs::File::create("/tmp/cdfuse.log")
@@ -52,7 +50,9 @@ fn main() {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     }
 
-    // cdfuse --unmount <mountpoint>: commit pending writes and unmount.
+    // cdfuse --unmount <mountpoint>: signal the running cdfuse process to
+    // repack and exit.  This is a cross-process call so an external mechanism
+    // is unavoidable; fusermount is the standard FUSE utility for this.
     if let Some(ref mp) = args.unmount {
         let status = std::process::Command::new("fusermount")
             .args(["-u", mp])
@@ -97,28 +97,8 @@ fn main() {
         libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
     }
 
-    let fs = fs::CdFs::new(vfs, args.readonly);
+    let fs     = fs::CdFs::new(vfs, args.readonly);
     let shared = fs.shared();
-
-    // SIGTERM: graceful unmount -> destroy() -> repack.
-    {
-        let mp = mount.to_string();
-        std::thread::spawn(move || {
-            unsafe {
-                let mut mask: libc::sigset_t = std::mem::zeroed();
-                libc::sigemptyset(&mut mask);
-                libc::sigaddset(&mut mask, libc::SIGTERM);
-                let mut sig: libc::c_int = 0;
-                libc::sigwait(&mask, &mut sig);
-            }
-            info!("SIGTERM -- graceful unmount");
-            match std::process::Command::new("fusermount").args(["-u", &mp]).status() {
-                Ok(s) if s.success() => {}
-                Ok(s)  => log::warn!("fusermount -u failed: exit {s}"),
-                Err(e) => log::warn!("fusermount -u error: {e}"),
-            }
-        });
-    }
 
     let mut options = vec![
         fuser::MountOption::FSName("cdfuse".to_string()),
@@ -132,44 +112,43 @@ fn main() {
     info!("mounting {} at {} ({})", packages, mount,
           if args.readonly { "ro" } else { "rw" });
 
-    // Interactive mode: TUI in main thread, FUSE session in background.
-    // Non-interactive (piped/scripted): block in main thread as before.
     if std::io::stdin().is_terminal() {
-        let mount_str = mount.to_string();
-        // Channel used only at startup to detect immediate mount failures
-        // (e.g. stale mount point) before the TUI is shown.
-        let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<()>>();
-        let fuse_thread = std::thread::spawn(move || {
-            let r = fuser::mount2(fs, &mount_str, &options);
-            tx.send(r).ok();
-        });
-
-        // Give mount2 up to 200ms to fail.  If it does, report the error and
-        // exit before the TUI is opened so the message is readable.
-        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-            Ok(Err(e)) => {
+        // Spawn the FUSE session in a background thread via spawn_mount2.
+        // Dropping the BackgroundSession unmounts and blocks until destroy()
+        // completes — no need to shell out to fusermount from our code.
+        let session = match fuser::spawn_mount2(fs, mount, &options) {
+            Ok(s)  => s,
+            Err(e) => {
                 log::error!("mount failed: {e}");
                 eprintln!("mount failed: {e}");
-                fuse_thread.join().ok();
                 std::process::exit(1);
             }
-            // Ok(Ok(())) = mount succeeded AND returned already (unmounted immediately).
-            // Err(Timeout) = still running after 200ms = normal startup.
-            _ => {}
+        };
+        let session: Arc<Mutex<Option<fuser::BackgroundSession>>> =
+            Arc::new(Mutex::new(Some(session)));
+
+        // SIGTERM: drop the session -> unmount -> destroy() -> repack -> exit.
+        {
+            let sess = Arc::clone(&session);
+            std::thread::spawn(move || {
+                unsafe {
+                    let mut mask: libc::sigset_t = std::mem::zeroed();
+                    libc::sigemptyset(&mut mask);
+                    libc::sigaddset(&mut mask, libc::SIGTERM);
+                    let mut sig: libc::c_int = 0;
+                    libc::sigwait(&mask, &mut sig);
+                }
+                info!("SIGTERM -- graceful unmount");
+                sess.lock().unwrap().take(); // blocks until destroy() finishes
+                std::process::exit(0);
+            });
         }
 
         match tui::run(mount, Arc::clone(&shared)) {
             tui::Action::Commit => {
                 drop(shared);
                 eprintln!("Repacking...");
-                match std::process::Command::new("fusermount").args(["-u", mount]).status() {
-                    Ok(s) if s.success() => {}
-                    Ok(s)  => eprintln!("fusermount -u failed: exit {s}"),
-                    Err(e) => eprintln!("fusermount -u error: {e}"),
-                }
-                if let Err(e) = fuse_thread.join() {
-                    eprintln!("FUSE session thread panicked: {e:?}");
-                }
+                session.lock().unwrap().take(); // unmount + blocks until destroy()
             }
             tui::Action::Abort => {
                 drop(shared);
