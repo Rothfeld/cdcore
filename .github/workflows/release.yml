@@ -17,10 +17,6 @@ jobs:
             target: x86_64
           - os: windows-latest
             target: x86_64
-          - os: macos-latest
-            target: x86_64      # Intel Mac
-          - os: macos-latest
-            target: aarch64     # Apple Silicon
 
     runs-on: ${{ matrix.os }}
     steps:
