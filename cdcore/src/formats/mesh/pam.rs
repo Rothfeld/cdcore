@@ -18,6 +18,10 @@ use half::f16;
 use crate::error::{read_u32_le, read_f32_le, Result, ParseError};
 
 const PAR_MAGIC: &[u8] = b"PAR ";
+// XAR is an extended PAR variant found in a small number of .pam files.
+// The layout is structurally identical but geom_off=0, so no geometry is
+// extracted; we return an empty mesh rather than a hard error.
+const XAR_MAGIC: &[u8] = b"XAR ";
 const HDR_MESH_COUNT:       usize = 0x10;
 const HDR_BBOX_MIN:         usize = 0x14;
 const HDR_BBOX_MAX:         usize = 0x20;
@@ -31,7 +35,7 @@ const SUBMESH_TABLE:  usize = 0x410;
 const SUBMESH_STRIDE: usize = 0x218;
 const SUBMESH_TEX_OFF: usize = 0x010;
 const SUBMESH_MAT_OFF: usize = 0x110;
-const STRIDE_CANDIDATES: &[usize] = &[
+pub(super) const STRIDE_CANDIDATES: &[usize] = &[
     6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 36, 40, 44, 48, 52, 56, 60, 64,
 ];
 
@@ -61,8 +65,14 @@ pub struct ParsedMesh {
 }
 
 pub fn parse(data: &[u8], filename: &str) -> Result<ParsedMesh> {
-    if data.len() < 0x50 || &data[..4] != PAR_MAGIC {
+    if data.len() < 0x50 {
         return Err(ParseError::magic(PAR_MAGIC, &data[..4.min(data.len())], 0));
+    }
+    if &data[..4] == XAR_MAGIC {
+        return Ok(ParsedMesh { path: filename.to_string(), format: "pam".to_string(), ..Default::default() });
+    }
+    if &data[..4] != PAR_MAGIC {
+        return Err(ParseError::magic(PAR_MAGIC, &data[..4], 0));
     }
 
     let bbox_min = read_bbox(data, HDR_BBOX_MIN)?;
@@ -117,7 +127,7 @@ pub fn parse(data: &[u8], filename: &str) -> Result<ParsedMesh> {
     // Detect combined-buffer layout
     let is_combined = detect_combined(&raw_entries);
     if is_combined {
-        parse_combined(data, &raw_entries, geom_off, bbox_min, bbox_max, &mut result);
+        parse_combined(data, &raw_entries, geom_off, bbox_min, bbox_max, &mut result, geom_decomp);
     } else {
         parse_independent(data, &raw_entries, geom_off, bbox_min, bbox_max, &mut result);
     }
@@ -164,13 +174,13 @@ fn read_raw_entry(data: &[u8], off: usize, index: usize) -> RawEntry {
     RawEntry { index, nv, ni, ve, ie, texture: tex, material: mat }
 }
 
-fn cstr(data: &[u8], max: usize) -> String {
+pub(super) fn cstr(data: &[u8], max: usize) -> String {
     let end = max.min(data.len());
     let nul = data[..end].iter().position(|&b| b == 0).unwrap_or(end);
     String::from_utf8_lossy(&data[..nul]).into_owned()
 }
 
-fn read_bbox(data: &[u8], off: usize) -> Result<[f32; 3]> {
+pub(super) fn read_bbox(data: &[u8], off: usize) -> Result<[f32; 3]> {
     Ok([
         read_f32_le(data, off)?,
         read_f32_le(data, off + 4)?,
@@ -189,7 +199,7 @@ fn detect_combined(entries: &[RawEntry]) -> bool {
     true
 }
 
-fn dequant(v: u16, mn: f32, mx: f32) -> f32 {
+pub(super) fn dequant(v: u16, mn: f32, mx: f32) -> f32 {
     mn + (v as f32 / 65535.0) * (mx - mn)
 }
 
@@ -200,52 +210,46 @@ fn parse_combined(
     bmin: [f32; 3],
     bmax: [f32; 3],
     result: &mut ParsedMesh,
+    geom_decomp: usize,
 ) {
     let total_v: usize = entries.iter().map(|e| e.nv).sum();
     let total_i: usize = entries.iter().map(|e| e.ni).sum();
+    let stride = match detect_stride(data, geom_off, total_v, total_i, geom_decomp) {
+        Some(s) => s,
+        None    => return,
+    };
+    let idx_base = geom_off + total_v * stride;
+    let has_uv   = stride >= 12;
 
-    // Try each stride candidate
-    for &stride in STRIDE_CANDIDATES {
-        let idx_base = geom_off + total_v * stride;
-        if idx_base + total_i * 2 > data.len() { continue; }
+    for e in entries {
+        let vert_base = geom_off + e.ve * stride;
+        let idx_off   = idx_base + e.ie * 2;
+        if idx_off + e.ni * 2 > data.len() { continue; }
 
-        // Validate first 50 indices
-        let valid = (0..total_i.min(50)).all(|j| {
-            let v = u16::from_le_bytes(data[idx_base + j*2..idx_base + j*2+2].try_into().unwrap()) as usize;
-            v < total_v
+        let indices: Vec<usize> = (0..e.ni)
+            .map(|j| u16::from_le_bytes(data[idx_off+j*2..idx_off+j*2+2].try_into().unwrap()) as usize)
+            .collect();
+
+        let mut unique: Vec<usize> = indices.iter().copied()
+            .collect::<std::collections::HashSet<_>>().into_iter().collect();
+        unique.sort_unstable();
+        let idx_map: std::collections::HashMap<usize, usize> =
+            unique.iter().enumerate().map(|(i, &g)| (g, i)).collect();
+
+        let (verts, uvs) = extract_verts(data, vert_base, stride, &unique, bmin, bmax, has_uv);
+        let faces = extract_faces(&indices, &idx_map);
+
+        result.submeshes.push(SubMesh {
+            name: format!("mesh_{:02}_{}", e.index, &e.material),
+            material: e.material.clone(),
+            texture: e.texture.clone(),
+            vertices: verts,
+            uvs,
+            faces,
+            vertex_count: unique.len(),
+            face_count: faces_count(&indices),
+            ..Default::default()
         });
-        if !valid { continue; }
-
-        let has_uv = stride >= 12;
-        for e in entries {
-            let vert_base = geom_off + e.ve * stride;
-            let idx_off   = idx_base  + e.ie * 2;
-            if idx_off + e.ni * 2 > data.len() { continue; }
-
-            let indices: Vec<usize> = (0..e.ni)
-                .map(|j| u16::from_le_bytes(data[idx_off+j*2..idx_off+j*2+2].try_into().unwrap()) as usize)
-                .collect();
-
-            let mut unique: Vec<usize> = indices.iter().copied().collect::<std::collections::HashSet<_>>().into_iter().collect();
-            unique.sort_unstable();
-            let idx_map: std::collections::HashMap<usize, usize> = unique.iter().enumerate().map(|(i,&g)| (g,i)).collect();
-
-            let (verts, uvs) = extract_verts(data, vert_base, stride, &unique, bmin, bmax, has_uv);
-            let faces = extract_faces(&indices, &idx_map);
-
-            result.submeshes.push(SubMesh {
-                name: format!("mesh_{:02}_{}", e.index, &e.material),
-                material: e.material.clone(),
-                texture: e.texture.clone(),
-                vertices: verts,
-                uvs,
-                faces,
-                vertex_count: unique.len(),
-                face_count: faces_count(&indices),
-                ..Default::default()
-            });
-        }
-        return;
     }
 }
 
@@ -355,7 +359,47 @@ fn parse_scan_fallback(
     }
 }
 
-fn find_local_stride(data: &[u8], geom_off: usize, voff: usize, nv: usize, ni: usize) -> Option<(usize, usize)> {
+/// Detect vertex stride for a combined vertex+index buffer.
+///
+/// When `geom_decomp` is non-zero (the known total geometry size), stride is
+/// derived algebraically: stride = (geom_decomp - total_i*2) / total_v.
+/// This is essential when total_v > 65535, where any u16 index trivially
+/// satisfies `< total_v` and the 50-sample probe always accepts stride=6.
+pub(super) fn detect_stride(
+    data: &[u8],
+    geom_off: usize,
+    total_v: usize,
+    total_i: usize,
+    geom_decomp: usize,
+) -> Option<usize> {
+    let idx_bytes = total_i * 2;
+
+    if geom_decomp > idx_bytes && total_v > 0 {
+        let remainder = geom_decomp - idx_bytes;
+        if remainder % total_v == 0 {
+            let candidate = remainder / total_v;
+            if STRIDE_CANDIDATES.contains(&candidate) {
+                let idx_base = geom_off + total_v * candidate;
+                if idx_base + idx_bytes <= data.len() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    for &s in STRIDE_CANDIDATES {
+        let idx_base = geom_off + total_v * s;
+        if idx_base + idx_bytes > data.len() { continue; }
+        let valid = (0..total_i.min(50)).all(|j| {
+            let v = u16::from_le_bytes(data[idx_base+j*2..idx_base+j*2+2].try_into().unwrap()) as usize;
+            v < total_v
+        });
+        if valid { return Some(s); }
+    }
+    None
+}
+
+pub(super) fn find_local_stride(data: &[u8], geom_off: usize, voff: usize, nv: usize, ni: usize) -> Option<(usize, usize)> {
     for &stride in STRIDE_CANDIDATES {
         let vert_start = geom_off + voff * stride;
         let idx_off    = vert_start + nv * stride;
@@ -369,7 +413,7 @@ fn find_local_stride(data: &[u8], geom_off: usize, voff: usize, nv: usize, ni: u
     None
 }
 
-fn extract_verts(
+pub(super) fn extract_verts(
     data: &[u8],
     vert_base: usize,
     stride: usize,
@@ -397,7 +441,7 @@ fn extract_verts(
     (verts, uvs)
 }
 
-fn extract_faces(indices: &[usize], idx_map: &std::collections::HashMap<usize, usize>) -> Vec<[u32; 3]> {
+pub(super) fn extract_faces(indices: &[usize], idx_map: &std::collections::HashMap<usize, usize>) -> Vec<[u32; 3]> {
     let mut faces = Vec::with_capacity(indices.len() / 3);
     let mut j = 0;
     while j + 2 < indices.len() {

@@ -21,6 +21,10 @@ hex = "0.4"                                               # SHA-1 hex encoding f
 pyo3          = { version = "0.28", optional = true }
 pyo3-stub-gen = { version = "0.22", optional = true }
 
+[[bin]]
+name = "stub_gen"
+required-features = ["python"]
+
 [features]
 # Enable Python bindings (required to build the maturin wheel).
 # extension-module tells pyo3 not to link libpython (correct for cdylib).
