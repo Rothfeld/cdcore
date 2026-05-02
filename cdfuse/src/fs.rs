@@ -489,10 +489,21 @@ impl SharedFs {
                     true
                 };
                 if should_add {
-                    queue_batch.push((child_vino, child_vpath.clone().into(), false));
+                    // Use virt_ext for the listing name so file managers pick
+                    // the right MIME type (e.g. .png instead of .dds).
+                    let virt_name = if vdir.filter_ext == vdir.virt_ext {
+                        name.clone()
+                    } else {
+                        format!("{}{}",
+                            &name[..name.len() - vdir.filter_ext.len()],
+                            vdir.virt_ext)
+                    };
+                    let vpath = Self::child_path(path, OsStr::new(&virt_name));
+                    let vino  = ino_for(&vpath);
+                    queue_batch.push((vino, vpath.clone().into(), false));
                     entries.push(DirEntry {
-                        ino: child_vino, attr: self.file_attr(child_vino, *orig_size as u64),
-                        name: name.clone(), path: child_vpath.into(), is_dir: false,
+                        ino: vino, attr: self.file_attr(vino, *orig_size as u64),
+                        name: virt_name, path: vpath.into(), is_dir: false,
                         attr_ttl: Duration::ZERO,
                     });
                 }
@@ -655,17 +666,9 @@ impl Filesystem for CdFs {
             reply.entry(&TTL, &attr, 0);
             return;
         }
-        // Overlay-only file: created via create() but not yet in VFS (e.g. temp files).
-        if self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| !*d) {
-            let ino  = self.ensure_path(&child, false);
-            let size = self.shared.write_overlay.lock().unwrap()
-                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
-            let attr = self.shared.file_attr(ino, size);
-            info!("<< lookup {child:?} -> overlay file {}ms", _t.elapsed().as_millis());
-            reply.entry(&Duration::ZERO, &attr, 0);
-            return;
-        }
         // Virtual file inside a virtual root tree (e.g. .paloc.jsonl/game/ui.paloc).
+        // Must come before the overlay-only check: virtual files are also
+        // registered in self.paths as non-dirs (via build_virtual_dir_entries).
         if let Some(vf) = virtual_files::resolve(&child) {
             if self.shared.vfs.lookup(&vf.source_path).is_some() {
                 let ino  = self.ensure_path(&child, false);
@@ -690,6 +693,16 @@ impl Filesystem for CdFs {
                 reply.entry(&TTL, &attr, 0);
                 return;
             }
+        }
+        // Overlay-only file: created via create() but not yet in VFS (e.g. temp files).
+        if self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| !*d) {
+            let ino  = self.ensure_path(&child, false);
+            let size = self.shared.write_overlay.lock().unwrap()
+                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
+            let attr = self.shared.file_attr(ino, size);
+            info!("<< lookup {child:?} -> overlay file {}ms", _t.elapsed().as_millis());
+            reply.entry(&Duration::ZERO, &attr, 0);
+            return;
         }
         // Negative cache: nodeid=0 + TTL tells the kernel to cache "not found"
         // for 60s and stop re-asking. Eliminates .Trash/.sh_thumbnails spam.
@@ -716,13 +729,9 @@ impl Filesystem for CdFs {
                 .unwrap_or(e.orig_size as u64);
             info!("<< getattr ino={ino} -> file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.file_attr(ino, size));
-        } else if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
-            // Overlay-only file (created via create(), not yet in VFS).
-            let size = self.shared.write_overlay.lock().unwrap()
-                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
-            info!("<< getattr ino={ino} -> overlay file size={size} {}ms", _t.elapsed().as_millis());
-            reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, size));
         } else if let Some(vf) = virtual_files::resolve(&path) {
+            // Virtual file check must come before overlay-only: virtual files
+            // are registered in self.paths as non-dirs by build_virtual_dir_entries.
             // Return exact size once decoded (TTL=60s); fall back to source
             // orig_size estimate with TTL=0 so the kernel re-queries immediately
             // after open() finishes decoding the content.
@@ -737,6 +746,12 @@ impl Filesystem for CdFs {
             };
             info!("<< getattr ino={ino} -> virtual size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&ttl, &self.shared.file_attr(ino, size));
+        } else if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
+            // Overlay-only file (created via create(), not yet in VFS).
+            let size = self.shared.write_overlay.lock().unwrap()
+                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
+            info!("<< getattr ino={ino} -> overlay file size={size} {}ms", _t.elapsed().as_millis());
+            reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, size));
         } else {
             info!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis());
             reply.error(ENOENT);

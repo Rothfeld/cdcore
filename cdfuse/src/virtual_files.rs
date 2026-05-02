@@ -28,14 +28,19 @@ use crimsonforge_core::formats::physics::parse_nav;
 
 // -- Constants -----------------------------------------------------------------
 
-/// (virtual_root_name, source_file_extension)
-static VIRTUAL_ROOTS: &[(&str, &str)] = &[
-    (".paloc.jsonl",       ".paloc"),
-    (".pabgb.jsonl",       ".pabgb"),
-    (".prefab.jsonl",      ".prefab"),
-    (".paa_metabin.jsonl", ".paa_metabin"),
-    (".nav.jsonl",         ".nav"),
-    (".dds.png",           ".dds"),
+/// (virtual_root_name, source_ext, virt_ext)
+///
+/// virt_ext is the extension files carry inside the virtual tree.
+/// It equals source_ext for all text/JSONL roots.
+/// For .dds.png/ it differs: sources are .dds, virtual files are .png
+/// so file managers use MIME detection on the extension.
+static VIRTUAL_ROOTS: &[(&str, &str, &str)] = &[
+    (".paloc.jsonl",       ".paloc",       ".paloc"),
+    (".pabgb.jsonl",       ".pabgb",       ".pabgb"),
+    (".prefab.jsonl",      ".prefab",      ".prefab"),
+    (".paa_metabin.jsonl", ".paa_metabin", ".paa_metabin"),
+    (".nav.jsonl",         ".nav",         ".nav"),
+    (".dds.png",           ".dds",         ".png"),
 ];
 
 // -- Public types --------------------------------------------------------------
@@ -57,26 +62,33 @@ pub struct VirtualFile {
 
 pub struct VirtualDirInfo {
     pub real_path:  String,          // matching real directory in VFS (empty = VFS root)
-    pub filter_ext: &'static str,    // extension files must have to appear here
+    pub filter_ext: &'static str,    // source extension to match against VFS files
+    pub virt_ext:   &'static str,    // extension to use in the virtual tree listing
 }
 
 // -- Routing -------------------------------------------------------------------
 
-/// Iterator over the top-level virtual directory names (e.g. ".paloc.json").
+/// Iterator over the top-level virtual directory names.
 pub fn virtual_root_dirs() -> impl Iterator<Item = &'static str> {
-    VIRTUAL_ROOTS.iter().map(|(name, _)| *name)
+    VIRTUAL_ROOTS.iter().map(|(name, _, _)| *name)
 }
 
 /// Map a virtual file path to its source descriptor.
 ///
-/// `.paloc.json/game/text/ui.paloc` -> `VirtualFile { PalocJson, "game/text/ui.paloc" }`
+/// `.paloc.jsonl/gamedata/localizationstring_ger.paloc` -> VirtualFile { PalocJson, "gamedata/..." }
+/// `.dds.png/ui/bitmap_bell.png`                        -> VirtualFile { DdsPng,    "ui/bitmap_bell.dds" }
 ///
 /// Returns `None` for virtual directory paths or unrecognised paths.
 pub fn resolve(virtual_path: &str) -> Option<VirtualFile> {
-    for &(vdir, ext) in VIRTUAL_ROOTS {
+    for &(vdir, src_ext, virt_ext) in VIRTUAL_ROOTS {
         if let Some(rest) = virtual_path.strip_prefix(vdir).and_then(|s| s.strip_prefix('/')) {
-            if rest.ends_with(ext) {
-                return Some(VirtualFile { kind: kind_for(ext), source_path: rest.to_string() });
+            if rest.ends_with(virt_ext) {
+                let source_path = if src_ext == virt_ext {
+                    rest.to_string()
+                } else {
+                    format!("{}{src_ext}", &rest[..rest.len() - virt_ext.len()])
+                };
+                return Some(VirtualFile { kind: kind_for(src_ext), source_path });
             }
         }
     }
@@ -85,20 +97,18 @@ pub fn resolve(virtual_path: &str) -> Option<VirtualFile> {
 
 /// Map a virtual directory path to info about the real directory it mirrors.
 ///
-/// `.paloc.json`       -> `VirtualDirInfo { real_path: "",      filter_ext: ".paloc", ... }`
-/// `.paloc.json/game`  -> `VirtualDirInfo { real_path: "game",  filter_ext: ".paloc", ... }`
+/// `.paloc.jsonl`      -> VirtualDirInfo { real_path: "",     filter_ext: ".paloc", virt_ext: ".paloc" }
+/// `.dds.png/ui`       -> VirtualDirInfo { real_path: "ui",   filter_ext: ".dds",   virt_ext: ".png"   }
 ///
 /// Returns `None` for virtual file paths or unrecognised paths.
 pub fn resolve_virtual_dir(path: &str) -> Option<VirtualDirInfo> {
-    for &(vdir, ext) in VIRTUAL_ROOTS {
+    for &(vdir, src_ext, virt_ext) in VIRTUAL_ROOTS {
         if path == vdir {
-            return Some(VirtualDirInfo { real_path: String::new(), filter_ext: ext });
+            return Some(VirtualDirInfo { real_path: String::new(), filter_ext: src_ext, virt_ext });
         }
         if let Some(rest) = path.strip_prefix(vdir).and_then(|s| s.strip_prefix('/')) {
-            // Only treat as a directory if the remaining segment doesn't look like
-            // a virtual file (i.e. it doesn't end with the matching source extension).
-            if !rest.ends_with(ext) {
-                return Some(VirtualDirInfo { real_path: rest.to_string(), filter_ext: ext });
+            if !rest.ends_with(virt_ext) {
+                return Some(VirtualDirInfo { real_path: rest.to_string(), filter_ext: src_ext, virt_ext });
             }
         }
     }
