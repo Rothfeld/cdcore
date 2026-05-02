@@ -156,8 +156,6 @@ by `crimsonforge_core`: BC1-BC7, BC6H, RGBA, float variants.
 #   ...
 ```
 
-Downsampling is nearest-neighbour (point sample). Optimised for size:
-stripped, `opt-level = "z"`, LTO, single codegen unit.
 
 ---
 
