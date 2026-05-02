@@ -726,7 +726,12 @@ impl Filesystem for CdFs {
             reply.error(libc::EROFS);
             return;
         }
-        if self.shared.vfs.lookup(&path).is_none() {
+        // Allow writes to VFS-backed files and to overlay-only files (created
+        // via create() but not yet in the VFS, e.g. GIO temp files).
+        let known = self.shared.vfs.lookup(&path).is_some()
+            || self.paths.get(&ino).is_some_and(|(_, d)| !*d);
+        if !known {
+            warn!("write ino={ino} {path:?} → ENOENT (not in VFS or overlay)");
             reply.error(ENOENT);
             return;
         }
