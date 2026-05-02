@@ -539,11 +539,17 @@ impl SharedFs {
             None => { warn!("flush_sync {path}: no pamt for group {group_dir}"); return; }
         };
         self.cache_put(ino, Arc::from(data.clone()));
-        let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir };
+        let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir.clone() };
         match self.repack_engine.repack(vec![mf], &self.papgt_path, true) {
             Ok(r) if r.success => {
                 info!("repack {path}: ok");
+                // Evict stale mmap so next read re-maps the updated PAZ.
                 self.paz_maps.lock().unwrap().remove(&entry.paz_file);
+                // Reload VfsManager entry so decode-cache misses get the new
+                // offset rather than the pre-repack one.
+                if let Err(e) = self.vfs.reload_group(&group_dir) {
+                    warn!("repack {path}: reload_group failed: {e}");
+                }
             }
             Ok(r)  => warn!("repack {path}: errors: {:?}", r.errors),
             Err(e) => warn!("repack {path}: failed: {e}"),

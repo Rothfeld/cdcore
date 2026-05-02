@@ -274,6 +274,32 @@ impl VfsManager {
         Ok(data)
     }
 
+    /// Reload one package group from disk, replacing all its in-memory entries.
+    ///
+    /// Parses the PAMT without holding the tree lock, then swaps entries in a
+    /// single write-lock so there is no window where the group is absent.
+    /// Call this after repacking a file in the group so reads that miss the
+    /// decode cache see the updated offsets rather than the stale ones.
+    pub fn reload_group(&self, group_dir: &str) -> Result<()> {
+        let pamt_path = self.packages_path.join(group_dir).join("0.pamt");
+        let paz_dir   = self.packages_path.join(group_dir);
+        let pamt = parse_pamt(
+            pamt_path.to_str().unwrap(),
+            Some(paz_dir.to_str().unwrap()),
+        )?;
+
+        let mut tree = self.tree.write().unwrap();
+        tree.retain(|_, (_, g)| g != group_dir);
+        for entry in &pamt.file_entries {
+            tree.insert(entry.path.clone(), (entry.clone(), group_dir.to_string()));
+        }
+        drop(tree);
+
+        self.pamt_cache.insert(group_dir.to_string(), pamt);
+        self.loaded.insert(group_dir.to_string(), ());
+        Ok(())
+    }
+
     /// Remove a single file entry from the in-memory index.
     /// The PAZ archive is not modified; the file simply becomes invisible.
     pub fn remove_entry(&self, path: &str) -> bool {
