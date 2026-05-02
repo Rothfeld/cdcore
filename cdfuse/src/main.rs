@@ -88,15 +88,6 @@ fn main() {
         }
     }
 
-    // Block SIGTERM before any threads are spawned so all inherit the mask.
-    // Ctrl-C (SIGINT) aborts immediately with no repack.
-    unsafe {
-        let mut mask: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&mut mask);
-        libc::sigaddset(&mut mask, libc::SIGTERM);
-        libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
-    }
-
     let fs     = fs::CdFs::new(vfs, args.readonly);
     let shared = fs.shared();
 
@@ -113,9 +104,6 @@ fn main() {
           if args.readonly { "ro" } else { "rw" });
 
     if std::io::stdin().is_terminal() {
-        // Spawn the FUSE session in a background thread via spawn_mount2.
-        // Dropping the BackgroundSession unmounts and blocks until destroy()
-        // completes — no need to shell out to fusermount from our code.
         let session = match fuser::spawn_mount2(fs, mount, &options) {
             Ok(s)  => s,
             Err(e) => {
@@ -126,23 +114,6 @@ fn main() {
         };
         let session: Arc<Mutex<Option<fuser::BackgroundSession>>> =
             Arc::new(Mutex::new(Some(session)));
-
-        // SIGTERM: drop the session -> unmount -> destroy() -> repack -> exit.
-        {
-            let sess = Arc::clone(&session);
-            std::thread::spawn(move || {
-                unsafe {
-                    let mut mask: libc::sigset_t = std::mem::zeroed();
-                    libc::sigemptyset(&mut mask);
-                    libc::sigaddset(&mut mask, libc::SIGTERM);
-                    let mut sig: libc::c_int = 0;
-                    libc::sigwait(&mask, &mut sig);
-                }
-                info!("SIGTERM -- graceful unmount");
-                sess.lock().unwrap().take(); // blocks until destroy() finishes
-                std::process::exit(0);
-            });
-        }
 
         match tui::run(mount, Arc::clone(&shared)) {
             tui::Action::Commit => {

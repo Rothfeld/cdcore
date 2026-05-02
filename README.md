@@ -20,7 +20,7 @@ cd cdcore
 ---
 
 ### `cdfuse`
-
+(Linux only)
 FUSE filesystem that mounts Crimson Desert archives as a Linux directory tree.
 Files are transparently decrypted and decompressed on access.
 Supports read-write: drag-and-drop files in, edit files in place, changes
@@ -55,7 +55,6 @@ cdfuse --unmount /mnt/cd
 cdfuse /path/to/crimson_desert_install_dir /mnt/cd --readonly
 ```
 
-Ctrl-C aborts without repacking. SIGTERM triggers graceful repack and exit.
 
 **Archive tree:**
 ```
