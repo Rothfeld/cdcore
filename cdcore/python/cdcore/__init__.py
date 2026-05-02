@@ -105,6 +105,41 @@ class _DdsProxy(types.ModuleType):
         return getattr(self._load_real(), name)
 
 
+class _MeshParserProxy(types.ModuleType):
+    """Proxy for core.mesh_parser that replaces parse_pam and parse_pamlod
+    with Rust implementations (30-70× faster) while delegating every other
+    attribute to the real Python module.
+
+    Patching the real module's globals on first load means that internal
+    calls such as parse_mesh → parse_pam also use the Rust path.
+    """
+
+    _real = None
+
+    def _load_real(self):
+        if self._real is None:
+            sys.modules.pop("core.mesh_parser", None)
+            import importlib
+            self._real = importlib.import_module("core.mesh_parser")
+            sys.modules["core.mesh_parser"] = self
+            # Patch the real module's globals so that parse_mesh() and any
+            # other helper that calls parse_pam/parse_pamlod by name goes
+            # through Rust as well.
+            from .cdcore import parse_pam as _rs_pam, parse_pamlod as _rs_pamlod
+            self._real.parse_pam    = _rs_pam
+            self._real.parse_pamlod = _rs_pamlod
+        return self._real
+
+    def __getattr__(self, name):
+        if name == "parse_pam":
+            from .cdcore import parse_pam
+            return parse_pam
+        if name == "parse_pamlod":
+            from .cdcore import parse_pamlod
+            return parse_pamlod
+        return getattr(self._load_real(), name)
+
+
 # Inject core.vfs_manager — any 'from core.vfs_manager import VfsManager'
 # gets _RustVfsManager without the Python project needing to know.
 if "core.vfs_manager" not in sys.modules:
@@ -117,3 +152,9 @@ if "core.vfs_manager" not in sys.modules:
 # fall through to the real Python module on first access.
 if "core.dds_reader" not in sys.modules:
     sys.modules["core.dds_reader"] = _DdsProxy("core.dds_reader")
+
+# Inject core.mesh_parser — parse_pam and parse_pamlod are backed by Rust;
+# everything else (parse_pac, ParsedMesh, SubMesh, _flatten_parsed_mesh_for_preview,
+# is_mesh_file, etc.) falls through to the real Python module on first access.
+if "core.mesh_parser" not in sys.modules:
+    sys.modules["core.mesh_parser"] = _MeshParserProxy("core.mesh_parser")
