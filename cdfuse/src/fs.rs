@@ -698,6 +698,55 @@ impl Filesystem for CdFs {
         reply.written(data.len() as u32);
     }
 
+    fn create(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr,
+              _mode: u32, _umask: u32, _flags: i32, reply: fuser::ReplyCreate) {
+        self.drain();
+        let parent_path = match self.path_of(parent) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        let child = SharedFs::child_path(&parent_path, name);
+
+        if virtual_files::resolve_virtual_dir(&child).is_some() {
+            reply.error(libc::EPERM);
+            return;
+        }
+
+        let ino = self.ensure_path(&child, false);
+        // New file starts empty; caller will write full content.
+        self.shared.write_overlay.lock().unwrap().entry(ino).or_insert_with(Vec::new);
+        let attr = self.shared.file_attr(ino, 0);
+        reply.created(&Duration::ZERO, &attr, 0, 0, fuser::consts::FOPEN_DIRECT_IO);
+    }
+
+    fn rename(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr,
+              newparent: u64, newname: &OsStr, _flags: u32, reply: fuser::ReplyEmpty) {
+        self.drain();
+        let src_parent = match self.path_of(parent) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        let dst_parent = match self.path_of(newparent) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        let src = SharedFs::child_path(&src_parent, name);
+        let dst = SharedFs::child_path(&dst_parent, newname);
+        let src_ino = ino_for(&src);
+        let dst_ino = self.ensure_path(&dst, false);
+
+        // Move overlay data from src to dst (temp-file → real path).
+        if let Some(data) = self.shared.write_overlay.lock().unwrap().remove(&src_ino) {
+            self.shared.cache_put(dst_ino, Arc::from(data.clone()));
+            self.shared.write_overlay.lock().unwrap().insert(dst_ino, data);
+        }
+
+        // Invalidate dir caches so ls reflects the change.
+        self.shared.dir_cache.write().unwrap().remove(&ino_for(&src_parent));
+        self.shared.dir_cache.write().unwrap().remove(&ino_for(&dst_parent));
+        reply.ok();
+    }
+
     fn release(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _flags: i32,
                _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
         self.drain();
