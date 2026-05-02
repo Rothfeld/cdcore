@@ -28,10 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
@@ -44,6 +40,10 @@ jobs:
           # resulting wheel runs on any Linux distro, not just the runner's
           # glibc version.  No effect on Windows/macOS.
           manylinux: auto
+          # Tell maturin-action which Python versions to build for. It translates
+          # these to /opt/python/cpXXX paths inside the manylinux container so
+          # maturin can find them (the container doesn't have a bare 'python3').
+          python-version: "3.10 3.11 3.12 3.13"
 
       - uses: actions/upload-artifact@v4
         with:
