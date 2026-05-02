@@ -438,6 +438,70 @@ impl SharedFs {
         info!("readdir (virtual) {path:?} → {n} entries");
         entries
     }
+
+    /// Repack one pending overlay entry asynchronously; sends `reply` when done.
+    /// Removes the entry from the overlay before spawning so a concurrent fsync
+    /// on the same ino does not double-repack.
+    fn flush_ino(shared: Arc<SharedFs>, ino: u64, path: String,
+                 data: Vec<u8>, reply: fuser::ReplyEmpty) {
+        let entry = match shared.vfs.lookup(&path) {
+            Some(e) => e,
+            None    => { reply.ok(); return; }
+        };
+        let group_dir = Path::new(&entry.paz_file)
+            .parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+            .unwrap_or("").to_string();
+        let pamt_data = match shared.vfs.get_pamt(&group_dir) {
+            Some(p) => p,
+            None => {
+                warn!("flush {path}: no pamt for group {group_dir}");
+                reply.ok(); return;
+            }
+        };
+
+        shared.cache_put(ino, Arc::from(data.clone()));
+
+        let papgt_path = shared.papgt_path.clone();
+        let pool = &shared.decode_pool as *const rayon::ThreadPool;
+        let pool = unsafe { &*pool };
+        pool.spawn(move || {
+            let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir };
+            match shared.repack_engine.repack(vec![mf], &papgt_path, true) {
+                Ok(r) if r.success => {
+                    info!("repack {path}: ok");
+                    shared.paz_maps.lock().unwrap().remove(&entry.paz_file);
+                }
+                Ok(r)  => warn!("repack {path}: errors: {:?}", r.errors),
+                Err(e) => warn!("repack {path}: failed: {e}"),
+            }
+            reply.ok();
+        });
+    }
+
+    /// Synchronous repack — used in destroy() where there is no reply to defer.
+    fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
+        let entry = match self.vfs.lookup(path) {
+            Some(e) => e,
+            None    => return,
+        };
+        let group_dir = Path::new(&entry.paz_file)
+            .parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+            .unwrap_or("").to_string();
+        let pamt_data = match self.vfs.get_pamt(&group_dir) {
+            Some(p) => p,
+            None => { warn!("flush_sync {path}: no pamt for group {group_dir}"); return; }
+        };
+        self.cache_put(ino, Arc::from(data.clone()));
+        let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir };
+        match self.repack_engine.repack(vec![mf], &self.papgt_path, true) {
+            Ok(r) if r.success => {
+                info!("repack {path}: ok");
+                self.paz_maps.lock().unwrap().remove(&entry.paz_file);
+            }
+            Ok(r)  => warn!("repack {path}: errors: {:?}", r.errors),
+            Err(e) => warn!("repack {path}: failed: {e}"),
+        }
+    }
 }
 
 // ── CdFs — session-thread-owned wrapper ──────────────────────────────────────
@@ -676,47 +740,37 @@ impl Filesystem for CdFs {
     fn release(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _flags: i32,
                _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
         self.drain();
+        // Overlay stays alive until fsync() or destroy() — no repack here.
+        // Update decode cache so re-opens see current content.
+        if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino) {
+            self.shared.cache_put(ino, Arc::from(data.as_slice()));
+        }
+        reply.ok();
+    }
 
+    fn fsync(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _datasync: bool,
+             reply: fuser::ReplyEmpty) {
+        self.drain();
         let pending = self.shared.write_overlay.lock().unwrap().remove(&ino);
         let Some(data) = pending else { reply.ok(); return; };
-
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
             None    => { reply.ok(); return; }
         };
-        let entry = match self.shared.vfs.lookup(&path) {
-            Some(e) => e,
-            None    => { reply.ok(); return; }
-        };
-        let group_dir = Path::new(&entry.paz_file)
-            .parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
-            .unwrap_or("").to_string();
-        let pamt_data = match self.shared.vfs.get_pamt(&group_dir) {
-            Some(p) => p,
-            None    => { warn!("release {path}: no pamt for group {group_dir}"); reply.ok(); return; }
-        };
+        info!("fsync {path:?} — repacking");
+        SharedFs::flush_ino(Arc::clone(&self.shared), ino, path, data, reply);
+    }
 
-        // Update decode cache with new content so reads during repack see correct data.
-        self.shared.cache_put(ino, Arc::from(data.clone()));
-
-        // Repack asynchronously; defer reply until done so close() blocks until
-        // the write is durable.
-        let shared     = Arc::clone(&self.shared);
-        let papgt_path = self.shared.papgt_path.clone();
-        let pool = &shared.decode_pool as *const rayon::ThreadPool;
-        let pool = unsafe { &*pool };
-        pool.spawn(move || {
-            let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir };
-            match shared.repack_engine.repack(vec![mf], &papgt_path, true) {
-                Ok(r) if r.success => {
-                    info!("repack {path}: ok");
-                    shared.paz_maps.lock().unwrap().remove(&entry.paz_file);
-                }
-                Ok(r)  => warn!("repack {path}: errors: {:?}", r.errors),
-                Err(e) => warn!("repack {path}: failed: {e}"),
+    fn destroy(&mut self) {
+        let overlay = std::mem::take(&mut *self.shared.write_overlay.lock().unwrap());
+        if overlay.is_empty() { return; }
+        warn!("destroy: flushing {} pending write(s) to PAZ", overlay.len());
+        for (ino, data) in overlay {
+            if let Some(path) = self.path_of(ino) {
+                let path = path.to_string();
+                self.shared.flush_ino_sync(ino, &path, data);
             }
-            reply.ok();
-        });
+        }
     }
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
