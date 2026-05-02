@@ -128,9 +128,15 @@ ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
 
 ---
 
-## Requirements
+## Build requirements
 
 - Rust 1.70+
-- Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`)
-- [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`)
-- libfuse3 (for `cdfuse`): `apt install libfuse3-dev`
+- Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`) -- pyo3 links against libpython at compile time
+- [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`) -- builds the cdcore wheel
+- `libfuse3-dev` (`apt install libfuse3-dev`) -- cdfuse links against libfuse3 at compile time
+
+## Runtime requirements
+
+- `cdcore` wheel: Python 3.10+, no other native dependencies
+- `cdfuse`: `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
+- `ddsthumb`: none (statically linked)
