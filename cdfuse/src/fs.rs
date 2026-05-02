@@ -44,6 +44,7 @@ use lru::LruCache;
 use memmap2::Mmap;
 
 use crimsonforge_core::{VfsManager, crypto, compression};
+use crate::virtual_files;
 
 const TTL:               Duration = Duration::from_secs(60);
 const ROOT_INO:          u64     = 1;
@@ -66,11 +67,12 @@ fn parent_path(path: &str) -> &str {
 // ── DirEntry ──────────────────────────────────────────────────────────────────
 
 struct DirEntry {
-    ino:    u64,
-    attr:   FileAttr,
-    name:   String,
-    path:   Box<str>,   // full virtual path — used by path_queue drain
-    is_dir: bool,
+    ino:      u64,
+    attr:     FileAttr,
+    name:     String,
+    path:     Box<str>,   // full virtual path — used by path_queue drain
+    is_dir:   bool,
+    attr_ttl: Duration,   // TTL=0 for virtual files so fstat always re-queries getattr
 }
 
 // ── SharedFs — state accessed by BOTH session thread and rayon workers ────────
@@ -200,6 +202,25 @@ impl SharedFs {
         };
 
         let result = slot.get_or_init(|| {
+            // Route virtual (synthesised) files to their renderer.
+            if let Some(vf) = virtual_files::resolve(path) {
+                let src_ino  = ino_for(&vf.source_path);
+                let src_data = self.decode(src_ino, &vf.source_path)?;
+                let bytes = match vf.kind {
+                    virtual_files::VirtualKind::PalocJson => {
+                        virtual_files::render_paloc(&src_data, &vf.source_path)?
+                    }
+                    virtual_files::VirtualKind::PabgbJson => {
+                        let pabgh_path = vf.source_path.strip_suffix(".pabgb")
+                            .map(|b| format!("{b}.pabgh"))?;
+                        let pabgh_ino  = ino_for(&pabgh_path);
+                        let pabgh_data = self.decode(pabgh_ino, &pabgh_path)?;
+                        virtual_files::render_pabgb(&pabgh_data, &src_data, &vf.source_path)?
+                    }
+                };
+                return Some(Arc::from(bytes));
+            }
+
             let entry = self.vfs.lookup(path)?;
             let raw: Vec<u8> = if let Some(mmap) = self.get_mmap(&entry.paz_file) {
                 let start = entry.offset as usize;
@@ -242,6 +263,8 @@ impl SharedFs {
     // ── Probe read (mmap slice) ────────────────────────────────────────────────
 
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
+        // Virtual files are synthesised — no raw PAZ slice to serve.
+        if virtual_files::resolve(path).is_some() { return None; }
         // Serve raw PAZ bytes only for *partial* offset-0 reads (size < orig_size).
         // This covers MIME detection on large files (Thunar reads 32KB of a 500KB file).
         // For small files where size >= orig_size (whole-file reads), we must serve
@@ -271,16 +294,36 @@ impl SharedFs {
     }
 
     fn build_dir_entries(&self, ino: u64, path: &str) -> Vec<DirEntry> {
+        // Virtual directory: build a filtered mirror of the real tree.
+        if let Some(vdir) = virtual_files::resolve_virtual_dir(path) {
+            return self.build_virtual_dir_entries(ino, path, &vdir);
+        }
+
         let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
         let mut entries = vec![
             DirEntry { ino, attr: self.dir_attr(ino), name: ".".into(),
-                       path: path.into(), is_dir: true },
+                       path: path.into(), is_dir: true, attr_ttl: TTL },
             DirEntry { ino: parent_ino, attr: self.dir_attr(parent_ino),
-                       name: "..".into(), path: parent_path(path).into(), is_dir: true },
+                       name: "..".into(), path: parent_path(path).into(), is_dir: true, attr_ttl: TTL },
         ];
 
         let children = self.vfs.list_dir_with_sizes_unsorted(path);
-        let mut queue_batch: Vec<(u64, Box<str>, bool)> = Vec::with_capacity(children.len());
+        let mut queue_batch: Vec<(u64, Box<str>, bool)> = Vec::with_capacity(
+            children.len() + virtual_files::virtual_root_dirs().count()
+        );
+
+        // Inject virtual root directories into the VFS root listing.
+        if path.is_empty() {
+            for vdir_name in virtual_files::virtual_root_dirs() {
+                let vino = ino_for(vdir_name);
+                queue_batch.push((vino, Box::from(vdir_name), true));
+                entries.push(DirEntry {
+                    ino: vino, attr: self.dir_attr(vino),
+                    name: vdir_name.to_string(), path: Box::from(vdir_name),
+                    is_dir: true, attr_ttl: TTL,
+                });
+            }
+        }
 
         for (name, is_dir, orig_size) in &children {
             let child_path = Self::child_path(path, OsStr::new(name));
@@ -292,7 +335,7 @@ impl SharedFs {
             };
             queue_batch.push((child_ino, child_path.clone().into(), *is_dir));
             entries.push(DirEntry { ino: child_ino, attr, name: name.clone(),
-                                    path: child_path.into(), is_dir: *is_dir });
+                                    path: child_path.into(), is_dir: *is_dir, attr_ttl: TTL });
         }
 
         // Push the whole batch as one Vec — O(1) pointer move under the lock.
@@ -301,6 +344,75 @@ impl SharedFs {
 
         let n = entries.len().saturating_sub(2);
         info!("readdir {path:?} → {n} entries");
+        entries
+    }
+
+    /// Build a directory listing for a virtual directory (e.g. `.paloc.json/game/text`).
+    ///
+    /// Lists the real VFS directory that the virtual path mirrors, but only
+    /// includes subdirectories and files whose extension matches `vdir.filter_ext`.
+    fn build_virtual_dir_entries(&self, ino: u64, path: &str,
+                                  vdir: &virtual_files::VirtualDirInfo) -> Vec<DirEntry> {
+        let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
+        let mut entries = vec![
+            DirEntry { ino, attr: self.dir_attr(ino), name: ".".into(),
+                       path: path.into(), is_dir: true, attr_ttl: TTL },
+            DirEntry { ino: parent_ino, attr: self.dir_attr(parent_ino),
+                       name: "..".into(), path: parent_path(path).into(), is_dir: true, attr_ttl: TTL },
+        ];
+
+        let children = self.vfs.list_dir_with_sizes_unsorted(&vdir.real_path);
+        let mut queue_batch: Vec<(u64, Box<str>, bool)> = Vec::with_capacity(children.len());
+
+        for (name, is_dir, orig_size) in &children {
+            let child_vpath = Self::child_path(path, OsStr::new(name));
+            let child_vino  = ino_for(&child_vpath);
+
+            if *is_dir {
+                // Skip subdirectories that contain no files with the target extension.
+                let real_child = if vdir.real_path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{name}", vdir.real_path)
+                };
+                if !self.vfs.subtree_has_ext(&real_child, vdir.filter_ext) {
+                    continue;
+                }
+                queue_batch.push((child_vino, child_vpath.clone().into(), true));
+                entries.push(DirEntry {
+                    ino: child_vino, attr: self.dir_attr(child_vino),
+                    name: name.clone(), path: child_vpath.into(), is_dir: true, attr_ttl: TTL,
+                });
+            } else if name.ends_with(vdir.filter_ext) {
+                // For .pabgb files, only expose when the paired .pabgh header exists.
+                let should_add = if vdir.filter_ext == ".pabgb" {
+                    name.strip_suffix(".pabgb").is_some_and(|base| {
+                        let real_sibling = if vdir.real_path.is_empty() {
+                            format!("{base}.pabgh")
+                        } else {
+                            format!("{}/{base}.pabgh", vdir.real_path)
+                        };
+                        self.vfs.lookup(&real_sibling).is_some()
+                    })
+                } else {
+                    true
+                };
+                if should_add {
+                    queue_batch.push((child_vino, child_vpath.clone().into(), false));
+                    entries.push(DirEntry {
+                        ino: child_vino, attr: self.file_attr(child_vino, *orig_size as u64),
+                        name: name.clone(), path: child_vpath.into(), is_dir: false,
+                        attr_ttl: Duration::ZERO,
+                    });
+                }
+            }
+            // Files that don't match the filter are silently omitted.
+        }
+
+        self.path_queue.lock().unwrap().push(queue_batch);
+
+        let n = entries.len().saturating_sub(2);
+        info!("readdir (virtual) {path:?} → {n} entries");
         entries
     }
 }
@@ -382,12 +494,42 @@ impl Filesystem for CdFs {
             reply.entry(&TTL, &attr, 0);
             return;
         }
-        if !self.shared.vfs.list_dir(&child).is_empty() || self.paths.contains_key(&ino_for(&child)) {
+        if !self.shared.vfs.list_dir(&child).is_empty()
+            || self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| *d)
+        {
             let ino  = self.ensure_path(&child, true);
             let attr = self.shared.dir_attr(ino);
             debug!("lookup {child:?} → dir ino={ino}");
             reply.entry(&TTL, &attr, 0);
             return;
+        }
+        // Virtual file inside a virtual root tree (e.g. .paloc.jsonl/game/ui.paloc).
+        if let Some(vf) = virtual_files::resolve(&child) {
+            if self.shared.vfs.lookup(&vf.source_path).is_some() {
+                let ino  = self.ensure_path(&child, false);
+                let size = self.shared.cache_get(ino)
+                    .map(|d| d.len() as u64)
+                    .or_else(|| self.shared.vfs.lookup(&vf.source_path).map(|e| e.orig_size as u64))
+                    .unwrap_or(0);
+                let attr = self.shared.file_attr(ino, size);
+                debug!("lookup {child:?} → virtual file ino={ino}");
+                // TTL=0: never cache virtual file attrs so fstat() always re-queries
+                // getattr(), which returns the exact size once the file is decoded.
+                reply.entry(&Duration::ZERO, &attr, 0);
+                return;
+            }
+        }
+        // Virtual directory (root like .paloc.json, or a mirrored subdir).
+        if let Some(vdir) = virtual_files::resolve_virtual_dir(&child) {
+            let real_exists = vdir.real_path.is_empty()
+                || self.shared.vfs.subtree_has_ext(&vdir.real_path, vdir.filter_ext);
+            if real_exists {
+                let ino  = self.ensure_path(&child, true);
+                let attr = self.shared.dir_attr(ino);
+                debug!("lookup {child:?} → virtual dir ino={ino}");
+                reply.entry(&TTL, &attr, 0);
+                return;
+            }
         }
         reply.error(ENOENT);
     }
@@ -403,9 +545,24 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        match self.shared.vfs.lookup(&path) {
-            Some(e) => reply.attr(&TTL, &self.shared.file_attr(ino, e.orig_size as u64)),
-            None    => reply.error(ENOENT),
+        if let Some(e) = self.shared.vfs.lookup(&path) {
+            reply.attr(&TTL, &self.shared.file_attr(ino, e.orig_size as u64));
+        } else if let Some(vf) = virtual_files::resolve(&path) {
+            // Return exact size once decoded (TTL=60s); fall back to source
+            // orig_size estimate with TTL=0 so the kernel re-queries immediately
+            // after open() finishes decoding the content.
+            let (size, ttl) = match self.shared.cache_get(ino) {
+                Some(d) => (d.len() as u64, TTL),
+                None    => {
+                    let est = self.shared.vfs.lookup(&vf.source_path)
+                        .map(|e| e.orig_size as u64)
+                        .unwrap_or(4096);
+                    (est, Duration::ZERO)
+                }
+            };
+            reply.attr(&ttl, &self.shared.file_attr(ino, size));
+        } else {
+            reply.error(ENOENT);
         }
     }
 
@@ -455,9 +612,25 @@ impl Filesystem for CdFs {
         self.drain();
         if self.is_dir(ino) {
             reply.error(libc::EISDIR);
-        } else {
-            reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
+            return;
         }
+        // For uncached virtual files, decode before replying.  Deferring the reply
+        // until the content is in the cache means the fstat() that editors do
+        // immediately after open() returns the exact size, not the estimate.
+        if let Some(path) = self.path_of(ino) {
+            if virtual_files::resolve(path).is_some() && self.shared.cache_get(ino).is_none() {
+                let path  = path.to_string();
+                let shared = Arc::clone(&self.shared);
+                let pool   = &shared.decode_pool as *const rayon::ThreadPool;
+                let pool   = unsafe { &*pool };
+                pool.spawn(move || {
+                    shared.decode(ino, &path);
+                    reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
+                });
+                return;
+            }
+        }
+        reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
     }
 
     fn read(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
@@ -519,7 +692,7 @@ impl Filesystem for CdFs {
 
 fn serve_readdirplus(entries: &[DirEntry], offset: i64, mut reply: ReplyDirectoryPlus) {
     for (i, e) in entries.iter().enumerate().skip(offset as usize) {
-        if reply.add(e.ino, (i + 1) as i64, &e.name, &TTL, &e.attr, 0) { break; }
+        if reply.add(e.ino, (i + 1) as i64, &e.name, &e.attr_ttl, &e.attr, 0) { break; }
     }
     reply.ok();
 }

@@ -3,6 +3,7 @@ use log::info;
 use crimsonforge_core::VfsManager;
 
 mod fs;
+mod virtual_files;
 
 #[derive(Parser)]
 #[command(name = "cdfuse", about = "Mount Crimson Desert archives as a read-only filesystem")]

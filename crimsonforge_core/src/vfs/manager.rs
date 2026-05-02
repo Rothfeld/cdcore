@@ -203,6 +203,26 @@ impl VfsManager {
         seen.into_iter().map(|(n, (d, s))| (n, d, s)).collect()
     }
 
+    /// Returns `true` if any file under `dir` (recursively) has a path ending
+    /// with `ext`.  Uses a single BTreeMap range scan and exits on first match.
+    pub fn subtree_has_ext(&self, dir: &str, ext: &str) -> bool {
+        let tree = self.tree.read().unwrap();
+        let prefix = if dir.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", dir.replace('\\', "/"))
+        };
+        for path in tree.range(prefix.clone()..).map(|(k, _)| k) {
+            if !prefix.is_empty() && !path.starts_with(&prefix) {
+                break;
+            }
+            if path.ends_with(ext) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn search(&self, query: &str) -> Vec<PamtFileEntry> {
         let q = query.to_lowercase();
         self.tree
