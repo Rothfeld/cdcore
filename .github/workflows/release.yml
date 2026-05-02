@@ -1,24 +1,28 @@
 name: Release
 
+# Trigger on any version tag push (e.g. git tag v1.24.0 && git push --tags)
 on:
   push:
     tags: ["v*"]
 
 jobs:
+
+  # Build crimsonforge_core Python wheels for each platform/arch combination.
+  # maturin-action handles toolchain setup, cross-compilation, and manylinux Docker.
   wheels:
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64
+            target: x86_64      # native build inside manylinux container
           - os: ubuntu-latest
-            target: aarch64
+            target: aarch64     # cross-compiled via QEMU inside manylinux container
           - os: windows-latest
             target: x86_64
           - os: macos-latest
-            target: x86_64
+            target: x86_64      # Intel Mac
           - os: macos-latest
-            target: aarch64
+            target: aarch64     # Apple Silicon
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -27,15 +31,23 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
+          # --out dist    write .whl files here
+          # -F python,... enable the pyo3 python feature and extension-module
+          #               (links against Python ABI, required for .pyd/.so output)
           args: --release --out dist -F python,extension-module
           working-directory: crimsonforge_core
+          # auto  builds inside a manylinux Docker container on Linux so the
+          # resulting wheel runs on any Linux distro, not just the runner's
+          # glibc version.  No effect on Windows/macOS.
           manylinux: auto
 
       - uses: actions/upload-artifact@v4
         with:
+          # Unique name per matrix cell so artifacts don't overwrite each other
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: crimsonforge_core/dist/*.whl
 
+  # Build the cdfuse FUSE binary.  Linux-only; FUSE is not available on Windows/macOS.
   cdfuse-binary:
     runs-on: ubuntu-latest
     steps:
@@ -49,16 +61,18 @@ jobs:
           name: cdfuse-linux-x86_64
           path: cdfuse/target/release/cdfuse
 
+  # Collect all artifacts from the jobs above and attach them to the GitHub Release
+  # created automatically when the tag was pushed.
   github-release:
     needs: [wheels, cdfuse-binary]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write   # required to upload release assets
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: artifacts   # downloads all artifacts into artifacts/<name>/
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: artifacts/**/*   # glob matches every file in every artifact dir
