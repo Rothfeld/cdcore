@@ -3,7 +3,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "crimsonforge_core"
+name = "cdcore"
 version = "0.1.0"
 description = "High-performance Rust core for CrimsonForge — VFS, parsers, crypto, repack"
 requires-python = ">=3.10"
@@ -13,6 +13,6 @@ classifiers = [
 ]
 
 [tool.maturin]
-module-name = "crimsonforge_core"
+module-name = "cdcore"
 python-source = "python"
 features = ["extension-module"]

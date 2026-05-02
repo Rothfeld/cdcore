@@ -20,4 +20,4 @@ pub use archive::{parse_papgt, parse_pamt, PapgtData, PamtData, PamtFileEntry};
 
 // PyO3 entry point — used by maturin to find the module init function
 #[cfg(feature = "python")]
-pub use python::crimsonforge_core;
+pub use python::cdcore;

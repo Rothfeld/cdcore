@@ -7,7 +7,7 @@ edition = "2021"
 name = "cdfuse"
 
 [dependencies]
-crimsonforge_core = { path = "../crimsonforge_core" }     # VFS, parsers, crypto, compression
+cdcore = { path = "../cdcore" }     # VFS, parsers, crypto, compression
 fuser = { version = "0.15", features = ["abi-7-21"] }    # FUSE filesystem; abi-7-21 enables READDIRPLUS
 libc = "0.2"                                              # uid/gid, EISDIR, ENOENT constants
 clap = { version = "4", features = ["derive"] }           # CLI argument parsing

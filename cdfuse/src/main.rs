@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use log::info;
-use crimsonforge_core::VfsManager;
+use cdcore::VfsManager;
 
 mod fs;
 mod tui;

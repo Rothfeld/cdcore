@@ -14,7 +14,7 @@ strip         = true
 panic         = "abort"
 
 [dependencies]
-crimsonforge_core = { path = "../crimsonforge_core", default-features = false }
+cdcore = { path = "../cdcore", default-features = false }
 clap    = { version = "4", features = ["derive"] }
 png     = "0.17"
 walkdir = "2"

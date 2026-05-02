@@ -1,10 +1,10 @@
 [package]
-name = "crimsonforge_core"
+name = "cdcore"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "crimsonforge_core"
+name = "cdcore"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use walkdir::WalkDir;
 
-use crimsonforge_core::formats::dds::decode_dds_to_rgba;
+use cdcore::formats::dds::decode_dds_to_rgba;
 
 #[derive(Parser)]
 #[command(name = "ddsthumb", about = "Generate PNG thumbnails from DDS files")]

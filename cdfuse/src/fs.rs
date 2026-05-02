@@ -43,8 +43,8 @@ use log::{debug, info, warn};
 use lru::LruCache;
 use memmap2::Mmap;
 
-use crimsonforge_core::{VfsManager, crypto, compression};
-use crimsonforge_core::repack::{RepackEngine, ModifiedFile};
+use cdcore::{VfsManager, crypto, compression};
+use cdcore::repack::{RepackEngine, ModifiedFile};
 use crate::virtual_files;
 
 const TTL:               Duration = Duration::from_secs(60);

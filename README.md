@@ -1,6 +1,6 @@
 ## Crates
 
-### `crimsonforge_core`
+### `cdcore`
 
 Rust library exposed to Python via [PyO3](https://pyo3.rs).
 
@@ -13,13 +13,13 @@ Rust library exposed to Python via [PyO3](https://pyo3.rs).
 
 **Build and install:**
 ```bash
-cd crimsonforge_core
+cd cdcore
 ./build.sh
 ```
 
 **Python usage:**
 ```python
-import crimsonforge_core as cf
+import cdcore as cf
 
 vfs = cf.VfsManager("/path/to/crimson_desert_install_dir")
 vfs.load_all_groups()
@@ -42,7 +42,7 @@ palette = cf.parse_skin_pabc(pabc_bytes, pab_hashes, "mesh.pabc")
 **Transparent Python integration:**
 
 ```python
-import crimsonforge_core  # inject first
+import cdcore  # inject first
 
 from core.vfs_manager import VfsManager  # -> _RustVfsManager
 from core.dds_reader import decode_dds_to_rgba  # -> Rust decoder
@@ -143,7 +143,7 @@ in memory and written to the PAZ archive when you commit (`[s]` or `[c]`).
 Batch DDS-to-PNG thumbnail generator. Takes a `.dds` file or directory
 (scanned recursively) and writes resized PNGs to an output directory,
 preserving the relative path structure. Handles all formats supported
-by `crimsonforge_core`: BC1-BC7, BC6H, RGBA, float variants.
+by `cdcore`: BC1-BC7, BC6H, RGBA, float variants.
 
 ```bash
 # Single file

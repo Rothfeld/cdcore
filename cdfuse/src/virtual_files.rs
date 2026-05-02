@@ -20,12 +20,12 @@
 //!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
 use log::warn;
-use crimsonforge_core::formats::dds::decode_dds_to_rgba;
+use cdcore::formats::dds::decode_dds_to_rgba;
 use image_dds::{dds_from_image, dds_image_format, Mipmaps, Quality};
-use crimsonforge_core::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
-use crimsonforge_core::formats::scene::parse_prefab;
-use crimsonforge_core::formats::animation::parse_paa_metabin;
-use crimsonforge_core::formats::physics::parse_nav;
+use cdcore::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
+use cdcore::formats::scene::parse_prefab;
+use cdcore::formats::animation::parse_paa_metabin;
+use cdcore::formats::physics::parse_nav;
 
 // -- Constants -----------------------------------------------------------------
 
@@ -192,10 +192,10 @@ pub fn render_prefab(data: &[u8], path: &str) -> Option<Vec<u8>> {
     let mut out = String::new();
     for s in &parsed.strings {
         let kind = match s.kind {
-            crimsonforge_core::formats::scene::PrefabStringKind::FileRef      => "FileRef",
-            crimsonforge_core::formats::scene::PrefabStringKind::EnumTag      => "EnumTag",
-            crimsonforge_core::formats::scene::PrefabStringKind::PropertyName => "PropertyName",
-            crimsonforge_core::formats::scene::PrefabStringKind::Unknown      => "Unknown",
+            cdcore::formats::scene::PrefabStringKind::FileRef      => "FileRef",
+            cdcore::formats::scene::PrefabStringKind::EnumTag      => "EnumTag",
+            cdcore::formats::scene::PrefabStringKind::PropertyName => "PropertyName",
+            cdcore::formats::scene::PrefabStringKind::Unknown      => "Unknown",
         };
         out.push_str("{\"kind\": \"");
         out.push_str(kind);

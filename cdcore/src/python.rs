@@ -1,7 +1,7 @@
 //! PyO3 Python extension module.
 //!
 //! Exposes the full Rust API as a native Python extension.
-//! Import as: `import crimsonforge_core as cf`
+//! Import as: `import cdcore as cf`
 
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods, gen_stub_pyfunction};
@@ -937,7 +937,7 @@ pyo3_stub_gen::define_stub_info_gatherer!(stub_info);
 // ── Module definition ─────────────────────────────────────────────────────────
 
 #[pymodule]
-pub fn crimsonforge_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn cdcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<PyPamtFileEntry>()?;
     m.add_class::<PyPamtData>()?;
