@@ -21,6 +21,7 @@
 
 use log::warn;
 use crimsonforge_core::formats::dds::decode_dds_to_rgba;
+use image_dds::{dds_from_image, dds_image_format, Mipmaps, Quality};
 use crimsonforge_core::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
 use crimsonforge_core::formats::scene::parse_prefab;
 use crimsonforge_core::formats::animation::parse_paa_metabin;
@@ -258,6 +259,35 @@ pub fn render_dds_png(data: &[u8], path: &str) -> Option<Vec<u8>> {
         .map_err(|e| warn!("render_dds_png {path}: png data: {e}")).ok()?;
     drop(writer);
     Some(buf)
+}
+
+/// Re-encode a PNG back to DDS, preserving the format of the original DDS.
+///
+/// Reads the DXGI/FourCC format from original_dds_data, decodes the PNG to
+/// RGBA, then re-encodes using image-dds so the output has the same pixel
+/// format (BC7, BC1, RGBA8, etc.) as the source file.
+pub fn parse_png_to_dds(png_data: &[u8], original_dds_data: &[u8], path: &str) -> Option<Vec<u8>> {
+    // Decode PNG to RgbaImage (image_dds expects this type).
+    let img = image_dds::image::load_from_memory_with_format(
+            png_data, image_dds::image::ImageFormat::Png)
+        .map_err(|e| warn!("parse_png_to_dds {path}: PNG decode: {e}")).ok()?
+        .into_rgba8();
+
+    // Extract the target format from the original DDS header.
+    let orig = image_dds::ddsfile::Dds::read(&mut std::io::Cursor::new(original_dds_data))
+        .map_err(|e| warn!("parse_png_to_dds {path}: original DDS parse: {e}")).ok()?;
+    let fmt = dds_image_format(&orig)
+        .map_err(|e| warn!("parse_png_to_dds {path}: get format: {e:?}")).ok()?;
+
+    // Re-encode. GeneratedAutomatic matches the mip chain games expect.
+    // Arg order: (image, format, quality, mipmaps)
+    let dds = dds_from_image(&img, fmt, Quality::Normal, Mipmaps::GeneratedAutomatic)
+        .map_err(|e| warn!("parse_png_to_dds {path}: encode ({fmt:?}): {e}")).ok()?;
+
+    let mut out = Vec::new();
+    dds.write(&mut out)
+        .map_err(|e| warn!("parse_png_to_dds {path}: write DDS: {e}")).ok()?;
+    Some(out)
 }
 
 // -- Write-back: JSONL -> binary -----------------------------------------------

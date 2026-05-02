@@ -533,6 +533,25 @@ impl SharedFs {
                         None => warn!("flush {path}: paloc JSONL parse failed, skipping"),
                     }
                 }
+                virtual_files::VirtualKind::DdsPng => {
+                    let src_entry = match self.vfs.lookup(&vf.source_path) {
+                        Some(e) => e,
+                        None    => { warn!("flush {path}: source {} not in VFS", vf.source_path); return; }
+                    };
+                    let orig_dds = match self.vfs.read_entry(&src_entry) {
+                        Ok(d)  => d,
+                        Err(e) => { warn!("flush {path}: read source DDS: {e}"); return; }
+                    };
+                    match virtual_files::parse_png_to_dds(&data, &orig_dds, &vf.source_path) {
+                        Some(dds) => {
+                            let src_ino = ino_for(&vf.source_path);
+                            info!("flush {path}: PNG -> {}B DDS ({:?}), repacking {}",
+                                  dds.len(), vf.source_path, vf.source_path);
+                            self.flush_ino_sync(src_ino, &vf.source_path, dds);
+                        }
+                        None => warn!("flush {path}: PNG->DDS conversion failed, skipping"),
+                    }
+                }
                 _ => warn!("flush {path}: write-back not implemented for this virtual format"),
             }
             return;
@@ -811,6 +830,7 @@ impl Filesystem for CdFs {
         if let Some(vf) = virtual_files::resolve(&path) {
             match vf.kind {
                 virtual_files::VirtualKind::PalocJson => {} // write-back supported
+                virtual_files::VirtualKind::DdsPng    => {} // write-back supported
                 _ => { reply.error(libc::EROFS); return; }
             }
         }
