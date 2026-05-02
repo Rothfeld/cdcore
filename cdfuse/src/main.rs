@@ -52,7 +52,7 @@ fn main() {
         }
     }
 
-    let fs = fs::CdFs::new(vfs);
+    let fs = fs::CdFs::new(vfs, args.readonly);
 
     let mut options = vec![
         fuser::MountOption::FSName("cdfuse".to_string()),

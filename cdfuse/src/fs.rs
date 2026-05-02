@@ -95,10 +95,11 @@ pub struct SharedFs {
     decode_pool:   rayon::ThreadPool,
     uid:           u32,
     gid:           u32,
+    readonly:      bool,
 }
 
 impl SharedFs {
-    fn new_inner(vfs: VfsManager) -> Self {
+    fn new_inner(vfs: VfsManager, readonly: bool) -> Self {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
         let packages_path = vfs.packages_path().to_string();
@@ -123,6 +124,7 @@ impl SharedFs {
             decode_pool,
             uid,
             gid,
+            readonly,
         }
     }
 
@@ -134,7 +136,7 @@ impl SharedFs {
             atime: UNIX_EPOCH, mtime: UNIX_EPOCH,
             ctime: UNIX_EPOCH, crtime: UNIX_EPOCH,
             kind: FileType::RegularFile,
-            perm: 0o644, nlink: 1,
+            perm: if self.readonly { 0o444 } else { 0o644 }, nlink: 1,
             uid: self.uid, gid: self.gid,
             rdev: 0, blksize: 4096, flags: 0,
         }
@@ -448,8 +450,8 @@ pub struct CdFs {
 }
 
 impl CdFs {
-    pub fn new(vfs: VfsManager) -> Self {
-        let shared = Arc::new(SharedFs::new_inner(vfs));
+    pub fn new(vfs: VfsManager, readonly: bool) -> Self {
+        let shared = Arc::new(SharedFs::new_inner(vfs, readonly));
         let mut paths = HashMap::new();
         paths.insert(ROOT_INO, (Box::from(""), true));
         CdFs { shared, paths }
