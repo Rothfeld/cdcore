@@ -10,12 +10,6 @@ one line at the top of `main.py` to activate:
 import cdcore  # monkeypatches core.vfs_manager and core.dds_reader
 ```
 
-- **VFS** -- read/write access to 1.4M+ game files across PAZ archives
-- **Parsers** -- PAM/PAC/PAMLOD meshes, PAA animations, PAB skeletons, PABC morph targets, PABC skin palettes, HKX physics, NAV navigation meshes, PALOC localisation, PABGB game data tables, prefabs
-- **DDS decode** -- BC1-BC7, BC6H HDR, BGRA32, Luminance, float formats, DX10 extended header
-- **Crypto** -- ChaCha20 (filename-based key derivation) + Bob Jenkins PaChecksum
-- **Compression** -- LZ4 block, zlib, Type-1 PAR per-section LZ4
-- **Repack** -- compress -> encrypt -> append PAZ -> update PAMT -> update PAPGT -> verify checksum chain
 
 **Build and install:**
 ```bash
@@ -42,7 +36,7 @@ cargo build --release
 
 **Mount (interactive TUI):**
 ```bash
-./target/release/cdfuse /path/to/crimson_desert_install_dir /mnt/cd
+cdfuse /path/to/crimson_desert_install_dir /mnt/cd
 ```
 
 Starts a TUI showing pending writes.
@@ -52,13 +46,13 @@ Starts a TUI showing pending writes.
 
 **Mount (non-interactive / scripted):**
 ```bash
-./target/release/cdfuse /path/to/crimson_desert_install_dir /mnt/cd 2>>cdfuse.log &
+cdfuse /path/to/crimson_desert_install_dir /mnt/cd 2>>cdfuse.log &
 
 # Repack and unmount when done
-./target/release/cdfuse --unmount /mnt/cd
+cdfuse --unmount /mnt/cd
 
 # Mount read-only
-./target/release/cdfuse /path/to/crimson_desert_install_dir /mnt/cd --readonly
+cdfuse /path/to/crimson_desert_install_dir /mnt/cd --readonly
 ```
 
 Ctrl-C aborts without repacking. SIGTERM triggers graceful repack and exit.
@@ -122,10 +116,10 @@ by `cdcore`: BC1-BC7, BC6H, RGBA, float variants.
 
 ```bash
 # Single file
-./target/release/ddsthumb ui/bitmap_bell.dds /tmp/thumbs --size 128
+ddsthumb ui/bitmap_bell.dds /tmp/thumbs --size 128
 
 # Entire tree
-./target/release/ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
+ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
 # Found 18355 DDS files -- generating 256px thumbnails ...
 #   1000/18355  errors=0
 #   ...
