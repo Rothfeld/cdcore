@@ -1,5 +1,5 @@
-from .crimsonforge_core import *
-from .crimsonforge_core import __version__
+from .cdcore import *
+from .cdcore import __version__
 
 import sys
 import types
@@ -15,7 +15,7 @@ class _RustVfsManager:
     """
 
     def __init__(self, packages_path):
-        from .crimsonforge_core import VfsManager as _RustVM
+        from .cdcore import VfsManager as _RustVM
         self._packages_path = Path(packages_path)
         self._rust = _RustVM(str(self._packages_path))
 
@@ -56,7 +56,7 @@ class _RustVfsManager:
 
 
 def _rust_decode_dds_to_rgba(data: bytes):
-    from .crimsonforge_core import decode_dds_to_rgba
+    from .cdcore import decode_dds_to_rgba
     return decode_dds_to_rgba(data)
 
 
