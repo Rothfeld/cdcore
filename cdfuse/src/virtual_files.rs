@@ -14,17 +14,18 @@
 //!   view  .paloc.jsonl/gamedata/text/ui.paloc
 //!
 //! Path taxonomy
-//! ─────────────
+//! -------------
 //!   resolve(path)         -> Some if path is a readable virtual file
 //!   resolve_virtual_dir() -> Some if path is a virtual directory
 //!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
+use log::warn;
 use crimsonforge_core::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
 use crimsonforge_core::formats::scene::parse_prefab;
 use crimsonforge_core::formats::animation::parse_paa_metabin;
 use crimsonforge_core::formats::physics::parse_nav;
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 
 /// (virtual_root_name, source_file_extension)
 static VIRTUAL_ROOTS: &[(&str, &str)] = &[
@@ -35,7 +36,7 @@ static VIRTUAL_ROOTS: &[(&str, &str)] = &[
     (".nav.jsonl",         ".nav"),
 ];
 
-// ── Public types ──────────────────────────────────────────────────────────────
+// -- Public types --------------------------------------------------------------
 
 #[derive(Clone, Copy)]
 pub enum VirtualKind {
@@ -56,7 +57,7 @@ pub struct VirtualDirInfo {
     pub filter_ext: &'static str,    // extension files must have to appear here
 }
 
-// ── Routing ───────────────────────────────────────────────────────────────────
+// -- Routing -------------------------------------------------------------------
 
 /// Iterator over the top-level virtual directory names (e.g. ".paloc.json").
 pub fn virtual_root_dirs() -> impl Iterator<Item = &'static str> {
@@ -65,7 +66,7 @@ pub fn virtual_root_dirs() -> impl Iterator<Item = &'static str> {
 
 /// Map a virtual file path to its source descriptor.
 ///
-/// `.paloc.json/game/text/ui.paloc` → `VirtualFile { PalocJson, "game/text/ui.paloc" }`
+/// `.paloc.json/game/text/ui.paloc` -> `VirtualFile { PalocJson, "game/text/ui.paloc" }`
 ///
 /// Returns `None` for virtual directory paths or unrecognised paths.
 pub fn resolve(virtual_path: &str) -> Option<VirtualFile> {
@@ -81,8 +82,8 @@ pub fn resolve(virtual_path: &str) -> Option<VirtualFile> {
 
 /// Map a virtual directory path to info about the real directory it mirrors.
 ///
-/// `.paloc.json`       → `VirtualDirInfo { real_path: "",      filter_ext: ".paloc", … }`
-/// `.paloc.json/game`  → `VirtualDirInfo { real_path: "game",  filter_ext: ".paloc", … }`
+/// `.paloc.json`       -> `VirtualDirInfo { real_path: "",      filter_ext: ".paloc", ... }`
+/// `.paloc.json/game`  -> `VirtualDirInfo { real_path: "game",  filter_ext: ".paloc", ... }`
 ///
 /// Returns `None` for virtual file paths or unrecognised paths.
 pub fn resolve_virtual_dir(path: &str) -> Option<VirtualDirInfo> {
@@ -112,11 +113,11 @@ fn kind_for(ext: &str) -> VirtualKind {
     }
 }
 
-// ── Renderers ─────────────────────────────────────────────────────────────────
+// -- Renderers -----------------------------------------------------------------
 
 /// Decode a PALOC binary and return UTF-8 JSON bytes.
 pub fn render_paloc(data: &[u8], path: &str) -> Option<Vec<u8>> {
-    let parsed = parse_paloc(data, path).ok()?;
+    let parsed = parse_paloc(data, path).map_err(|e| warn!("render_paloc {path}: {e}")).ok()?;
     let mut out = String::new();
     for entry in &parsed.entries {
         out.push_str("{\"key\": ");
@@ -130,7 +131,7 @@ pub fn render_paloc(data: &[u8], path: &str) -> Option<Vec<u8>> {
 
 /// Decode a PABGB binary pair and return UTF-8 JSON bytes.
 pub fn render_pabgb(pabgh_data: &[u8], pabgb_data: &[u8], path: &str) -> Option<Vec<u8>> {
-    let table = parse_pabgb(pabgh_data, pabgb_data, path).ok()?;
+    let table = parse_pabgb(pabgh_data, pabgb_data, path).map_err(|e| warn!("render_pabgb {path}: {e}")).ok()?;
     let mut out = String::new();
     for row in &table.rows {
         out.push_str("{\"index\": ");
@@ -157,9 +158,9 @@ pub fn render_pabgb(pabgh_data: &[u8], pabgb_data: &[u8], path: &str) -> Option<
     Some(out.into_bytes())
 }
 
-/// Decode a prefab and return UTF-8 JSONL — one line per string entry.
+/// Decode a prefab and return UTF-8 JSONL -- one line per string entry.
 pub fn render_prefab(data: &[u8], path: &str) -> Option<Vec<u8>> {
-    let parsed = parse_prefab(data, path).ok()?;
+    let parsed = parse_prefab(data, path).map_err(|e| warn!("render_prefab {path}: {e}")).ok()?;
     let mut out = String::new();
     for s in &parsed.strings {
         let kind = match s.kind {
@@ -177,9 +178,9 @@ pub fn render_prefab(data: &[u8], path: &str) -> Option<Vec<u8>> {
     Some(out.into_bytes())
 }
 
-/// Decode a paa_metabin and return UTF-8 JSONL — one line per record.
+/// Decode a paa_metabin and return UTF-8 JSONL -- one line per record.
 pub fn render_paa_metabin(data: &[u8], path: &str) -> Option<Vec<u8>> {
-    let parsed = parse_paa_metabin(data, path).ok()?;
+    let parsed = parse_paa_metabin(data, path).map_err(|e| warn!("render_paa_metabin {path}: {e}")).ok()?;
     let mut out = String::new();
     for r in &parsed.records {
         out.push_str("{\"offset\": ");
@@ -195,9 +196,9 @@ pub fn render_paa_metabin(data: &[u8], path: &str) -> Option<Vec<u8>> {
     Some(out.into_bytes())
 }
 
-/// Decode a nav mesh and return UTF-8 JSONL — one line per cell.
+/// Decode a nav mesh and return UTF-8 JSONL -- one line per cell.
 pub fn render_nav(data: &[u8], path: &str) -> Option<Vec<u8>> {
-    let parsed = parse_nav(data, path).ok()?;
+    let parsed = parse_nav(data, path).map_err(|e| warn!("render_nav {path}: {e}")).ok()?;
     let mut out = String::new();
     for c in &parsed.cells {
         out.push_str("{\"cell_id\": ");
@@ -215,17 +216,20 @@ pub fn render_nav(data: &[u8], path: &str) -> Option<Vec<u8>> {
     Some(out.into_bytes())
 }
 
-// ── Write-back: JSONL -> binary ───────────────────────────────────────────────
+// -- Write-back: JSONL -> binary -----------------------------------------------
 
-/// Parse PALOC JSONL (one `{"key":…,"value":…}` per line) back to binary.
+/// Parse PALOC JSONL (one `{"key":...,"value":...}` per line) back to binary.
 pub fn parse_paloc_jsonl(data: &[u8]) -> Option<Vec<u8>> {
-    let text = std::str::from_utf8(data).ok()?;
+    let text = std::str::from_utf8(data)
+        .map_err(|e| warn!("parse_paloc_jsonl: invalid UTF-8: {e}")).ok()?;
     let mut entries = Vec::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() { continue; }
-        let key   = extract_json_field(line, "\"key\"")?;
-        let value = extract_json_field(line, "\"value\"")?;
+        let key   = extract_json_field(line, "\"key\"")
+            .unwrap_or_else(|| { warn!("parse_paloc_jsonl: missing key in: {line}"); String::new() });
+        let value = extract_json_field(line, "\"value\"")
+            .unwrap_or_else(|| { warn!("parse_paloc_jsonl: missing value in: {line}"); String::new() });
         entries.push(PalocEntry { key, value, key_offset: 0, value_offset: 0 });
     }
     Some(serialize_paloc(&entries))
@@ -263,7 +267,7 @@ fn parse_json_string(s: &str) -> Option<String> {
     }
 }
 
-// ── JSON helpers ──────────────────────────────────────────────────────────────
+// -- JSON helpers --------------------------------------------------------------
 
 fn push_json_str(out: &mut String, s: &str) {
     out.push('"');

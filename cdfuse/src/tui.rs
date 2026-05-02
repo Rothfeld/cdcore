@@ -2,7 +2,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::{
+use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     terminal,
 };
@@ -22,15 +22,17 @@ pub enum Action { Commit, Abort }
 pub fn run(mount: &str, shared: Arc<SharedFs>) -> Action {
     terminal::enable_raw_mode().expect("enable raw mode");
     let mut stdout = io::stdout();
-    crossterm::execute!(stdout, terminal::EnterAlternateScreen).ok();
+    ratatui::crossterm::execute!(stdout, terminal::EnterAlternateScreen)
+        .expect("enter alternate screen");
 
     let backend  = CrosstermBackend::new(io::stdout());
     let mut term = Terminal::new(backend).expect("create terminal");
 
     let action = event_loop(mount, &shared, &mut term);
 
-    crossterm::execute!(io::stdout(), terminal::LeaveAlternateScreen).ok();
-    terminal::disable_raw_mode().ok();
+    ratatui::crossterm::execute!(io::stdout(), terminal::LeaveAlternateScreen)
+        .expect("leave alternate screen");
+    terminal::disable_raw_mode().expect("disable raw mode");
     action
 }
 
@@ -71,7 +73,7 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String]) {
         ])
         .split(area);
 
-    // ── Header ────────────────────────────────────────────────────────────────
+    // -- Header ----------------------------------------------------------------
     let header = Paragraph::new(Line::from(vec![
         Span::raw(" "),
         Span::styled("cdfuse", Style::default().add_modifier(Modifier::BOLD)),
@@ -82,7 +84,7 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String]) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(header, chunks[0]);
 
-    // ── Body ──────────────────────────────────────────────────────────────────
+    // -- Body ------------------------------------------------------------------
     let items: Vec<ListItem> = if pending.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
             " No pending writes.",
@@ -107,7 +109,7 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String]) {
         .block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(list, chunks[1]);
 
-    // ── Footer ────────────────────────────────────────────────────────────────
+    // -- Footer ----------------------------------------------------------------
     let footer = Paragraph::new(Line::from(vec![
         Span::raw("  "),
         Span::styled("[c]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),

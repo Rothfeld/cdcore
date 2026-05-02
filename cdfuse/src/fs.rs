@@ -1,28 +1,28 @@
-//! Parallel FUSE filesystem — `impl Filesystem for CdFs` where CdFs wraps Arc<SharedFs>.
+//! Parallel FUSE filesystem -- `impl Filesystem for CdFs` where CdFs wraps Arc<SharedFs>.
 //!
 //! Concurrency model
-//! ─────────────────
-//! The FUSE session loop calls callbacks with `&mut CdFs` — single-threaded.
+//! -----------------
+//! The FUSE session loop calls callbacks with `&mut CdFs` -- single-threaded.
 //! Slow operations (cold dir build, full decode) are offloaded to rayon workers.
 //! Reply objects are Send and are consumed on the worker thread.
 //!
 //! Key insight: workers must not write to any structure that the session thread
 //! reads on the hot path.  This was the root of the freeze:
 //!
-//!   DashMap  → crossbeam_epoch sched_yield (31% CPU wasted)
-//!   RwLock   → bulk writes from N workers starved the session thread's reads
+//!   DashMap  -> crossbeam_epoch sched_yield (31% CPU wasted)
+//!   RwLock   -> bulk writes from N workers starved the session thread's reads
 //!
 //! Solution: session thread owns a private `paths` HashMap (no lock at all).
 //! Workers push new (ino, path, is_dir) tuples onto a Mutex<Vec> queue.
-//! Session thread drains the queue into `paths` at the top of each callback —
+//! Session thread drains the queue into `paths` at the top of each callback --
 //! a single Mutex acquire/release, then all reads are unsynchronised.
 //!
 //! Workers touch only:
-//!   dir_cache   RwLock — one brief write per dir (insert Arc<OnceLock>)
-//!   in_flight   RwLock — one brief write per cold decode
-//!   decode_cache Mutex — brief for cache probe/insert
-//!   paz_maps     Mutex — rare (one per PAZ file)
-//!   path_queue   Mutex — one push per child entry (append to Vec)
+//!   dir_cache   RwLock -- one brief write per dir (insert Arc<OnceLock>)
+//!   in_flight   RwLock -- one brief write per cold decode
+//!   decode_cache Mutex -- brief for cache probe/insert
+//!   paz_maps     Mutex -- rare (one per PAZ file)
+//!   path_queue   Mutex -- one push per child entry (append to Vec)
 //!   vfs          internally Arc<RwLock<BTreeMap>>, read-only after load
 
 use std::collections::HashMap;
@@ -75,7 +75,7 @@ macro_rules! timed {
     }};
 }
 
-// ── Inode helpers ─────────────────────────────────────────────────────────────
+// -- Inode helpers -------------------------------------------------------------
 
 fn ino_for(path: &str) -> u64 {
     if path.is_empty() { return ROOT_INO; }
@@ -88,18 +88,18 @@ fn parent_path(path: &str) -> &str {
     path.rsplit_once('/').map(|(p, _)| p).unwrap_or("")
 }
 
-// ── DirEntry ──────────────────────────────────────────────────────────────────
+// -- DirEntry ------------------------------------------------------------------
 
 struct DirEntry {
     ino:      u64,
     attr:     FileAttr,
     name:     String,
-    path:     Box<str>,   // full virtual path — used by path_queue drain
+    path:     Box<str>,   // full virtual path -- used by path_queue drain
     is_dir:   bool,
     attr_ttl: Duration,   // TTL=0 for virtual files so fstat always re-queries getattr
 }
 
-// ── SharedFs — state accessed by BOTH session thread and rayon workers ────────
+// -- SharedFs -- state accessed by BOTH session thread and rayon workers --------
 
 pub struct SharedFs {
     vfs:           VfsManager,
@@ -110,12 +110,12 @@ pub struct SharedFs {
     in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
     paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
     write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
-    pending_paths:  Mutex<HashMap<u64, String>>,   // ino → path for TUI display
+    pending_paths:  Mutex<HashMap<u64, String>>,   // ino -> path for TUI display
     repack_engine:  RepackEngine,
     papgt_path:     String,
-    /// Dedicated thread pool for file decodes — separate from the rayon global
+    /// Dedicated thread pool for file decodes -- separate from the rayon global
     /// pool used by dir builds so decodes are never queued behind dir builds.
-    /// Fixed size: avoids the 292K × pthread_create overhead of std::thread::spawn.
+    /// Fixed size: avoids the 292K x pthread_create overhead of std::thread::spawn.
     decode_pool:   rayon::ThreadPool,
     uid:           u32,
     gid:           u32,
@@ -159,7 +159,7 @@ impl SharedFs {
         v
     }
 
-    // ── Attr builders ─────────────────────────────────────────────────────────
+    // -- Attr builders ---------------------------------------------------------
 
     fn file_attr(&self, ino: u64, size: u64) -> FileAttr {
         FileAttr {
@@ -199,7 +199,7 @@ impl SharedFs {
         }
     }
 
-    // ── mmap pool ─────────────────────────────────────────────────────────────
+    // -- mmap pool -------------------------------------------------------------
 
     fn get_mmap(&self, paz_path: &str) -> Option<Arc<Mmap>> {
         {
@@ -213,7 +213,7 @@ impl SharedFs {
         Some(m)
     }
 
-    // ── Decode cache ──────────────────────────────────────────────────────────
+    // -- Decode cache ----------------------------------------------------------
 
     fn cache_get(&self, ino: u64) -> Option<Arc<[u8]>> {
         self.decode_cache.lock().unwrap().get(&ino).map(Arc::clone)
@@ -232,7 +232,7 @@ impl SharedFs {
         self.cached_bytes.fetch_add(len, Ordering::Relaxed);
     }
 
-    // ── Full decode (rayon worker) ─────────────────────────────────────────────
+    // -- Full decode (rayon worker) ---------------------------------------------
 
     fn decode(&self, ino: u64, path: &str) -> Option<Arc<[u8]>> {
         if let Some(d) = self.cache_get(ino) {
@@ -285,10 +285,17 @@ impl SharedFs {
                 mmap[start..end].to_vec()
             } else {
                 use std::io::{Read, Seek, SeekFrom};
-                let mut f = std::fs::File::open(&entry.paz_file).ok()?;
-                f.seek(SeekFrom::Start(entry.offset)).ok()?;
+                let mut f = match std::fs::File::open(&entry.paz_file) {
+                    Ok(f)  => f,
+                    Err(e) => { warn!("decode {path}: open {}: {e}", entry.paz_file); return None; }
+                };
+                if let Err(e) = f.seek(SeekFrom::Start(entry.offset)) {
+                    warn!("decode {path}: seek to {}: {e}", entry.offset); return None;
+                }
                 let mut buf = vec![0u8; entry.comp_size as usize];
-                f.read_exact(&mut buf).ok()?;
+                if let Err(e) = f.read_exact(&mut buf) {
+                    warn!("decode {path}: read {} bytes: {e}", entry.comp_size); return None;
+                }
                 buf
             };
             let mut data = raw;
@@ -312,22 +319,22 @@ impl SharedFs {
         }
     }
 
-    // ── Probe read (mmap slice) ────────────────────────────────────────────────
+    // -- Probe read (mmap slice) ------------------------------------------------
 
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
-        // Virtual files are synthesised — no raw PAZ slice to serve.
+        // Virtual files are synthesised -- no raw PAZ slice to serve.
         if virtual_files::resolve(path).is_some() { return None; }
-        // Pending writes — serve from overlay, not stale PAZ bytes.
+        // Pending writes -- serve from overlay, not stale PAZ bytes.
         if self.write_overlay.lock().unwrap().contains_key(&ino) { return None; }
         // Serve raw PAZ bytes only for *partial* offset-0 reads (size < orig_size).
         // This covers MIME detection on large files (Thunar reads 32KB of a 500KB file).
         // For small files where size >= orig_size (whole-file reads), we must serve
-        // decoded content — removing this guard breaks encrypted files (raw bytes ≠
+        // decoded content -- removing this guard breaks encrypted files (raw bytes !=
         // decrypted content, causing incorrect checksums and garbled data).
         if offset != 0 { return None; }
         if self.cache_get(ino).is_some() { return None; }
         let entry = self.vfs.lookup(path)?;
-        if size >= entry.orig_size { return None; }  // whole-file read — must decode
+        if size >= entry.orig_size { return None; }  // whole-file read -- must decode
         let mmap  = self.get_mmap(&entry.paz_file)?;
         let start = entry.offset as usize;
         let raw   = (size as usize).min(entry.comp_size as usize);
@@ -336,7 +343,7 @@ impl SharedFs {
         Some(mmap[start..end].to_vec())
     }
 
-    // ── Dir cache ─────────────────────────────────────────────────────────────
+    // -- Dir cache -------------------------------------------------------------
 
     fn dir_slot(&self, ino: u64) -> Arc<OnceLock<Vec<DirEntry>>> {
         if let Some(s) = self.dir_cache.read().unwrap().get(&ino) {
@@ -392,12 +399,12 @@ impl SharedFs {
                                     path: child_path.into(), is_dir: *is_dir, attr_ttl: TTL });
         }
 
-        // Push the whole batch as one Vec — O(1) pointer move under the lock.
+        // Push the whole batch as one Vec -- O(1) pointer move under the lock.
         // extend() would hold the lock while moving 329K items; push() does not.
         self.path_queue.lock().unwrap().push(queue_batch);
 
         let n = entries.len().saturating_sub(2);
-        info!("readdir {path:?} → {n} entries");
+        info!("readdir {path:?} -> {n} entries");
         entries
     }
 
@@ -466,11 +473,11 @@ impl SharedFs {
         self.path_queue.lock().unwrap().push(queue_batch);
 
         let n = entries.len().saturating_sub(2);
-        info!("readdir (virtual) {path:?} → {n} entries");
+        info!("readdir (virtual) {path:?} -> {n} entries");
         entries
     }
 
-    /// Synchronous repack — called from destroy() on unmount.
+    /// Synchronous repack -- called from destroy() on unmount.
     fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(&ino);
         // Virtual file: convert JSONL back to binary and repack via source path.
@@ -516,13 +523,13 @@ impl SharedFs {
     }
 }
 
-// ── CdFs — session-thread-owned wrapper ──────────────────────────────────────
+// -- CdFs -- session-thread-owned wrapper --------------------------------------
 
 pub struct CdFs {
     shared: Arc<SharedFs>,
-    /// Private path map — only the session thread reads/writes this.
+    /// Private path map -- only the session thread reads/writes this.
     /// No lock needed. Populated by draining shared.path_queue each callback.
-    paths: HashMap<u64, (Box<str>, bool)>,  // ino → (path, is_dir)
+    paths: HashMap<u64, (Box<str>, bool)>,  // ino -> (path, is_dir)
 }
 
 impl CdFs {
@@ -571,15 +578,15 @@ impl CdFs {
     }
 }
 
-// ── Filesystem impl ───────────────────────────────────────────────────────────
+// -- Filesystem impl -----------------------------------------------------------
 
 impl Filesystem for CdFs {
     fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
         // Advertise READDIRPLUS capability so the kernel sends READDIRPLUS
-        // instead of READDIR + N×LOOKUP. Without this the kernel never calls
+        // instead of READDIR + NxLOOKUP. Without this the kernel never calls
         // our readdirplus() handler, causing 329K individual lookup round-trips.
         // Requires abi-7-21. Without this flag the kernel never calls our
-        // readdirplus() handler — it falls back to READDIR + N×LOOKUP instead.
+        // readdirplus() handler -- it falls back to READDIR + NxLOOKUP instead.
         let _ = config.add_capabilities(fuser::consts::FUSE_DO_READDIRPLUS);
         info!("filesystem mounted (readdirplus enabled)");
         Ok(())
@@ -598,7 +605,7 @@ impl Filesystem for CdFs {
         if let Some(entry) = self.shared.vfs.lookup(&child) {
             let ino  = self.ensure_path(&child, false);
             let attr = self.shared.file_attr(ino, entry.orig_size as u64);
-            info!("<< lookup {child:?} → file {}ms", _t.elapsed().as_millis());
+            info!("<< lookup {child:?} -> file {}ms", _t.elapsed().as_millis());
             reply.entry(&TTL, &attr, 0);
             return;
         }
@@ -607,7 +614,7 @@ impl Filesystem for CdFs {
         {
             let ino  = self.ensure_path(&child, true);
             let attr = self.shared.dir_attr(ino);
-            info!("<< lookup {child:?} → dir {}ms", _t.elapsed().as_millis());
+            info!("<< lookup {child:?} -> dir {}ms", _t.elapsed().as_millis());
             reply.entry(&TTL, &attr, 0);
             return;
         }
@@ -617,7 +624,7 @@ impl Filesystem for CdFs {
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
             let attr = self.shared.file_attr(ino, size);
-            info!("<< lookup {child:?} → overlay file {}ms", _t.elapsed().as_millis());
+            info!("<< lookup {child:?} -> overlay file {}ms", _t.elapsed().as_millis());
             reply.entry(&Duration::ZERO, &attr, 0);
             return;
         }
@@ -630,7 +637,7 @@ impl Filesystem for CdFs {
                     .or_else(|| self.shared.vfs.lookup(&vf.source_path).map(|e| e.orig_size as u64))
                     .unwrap_or(0);
                 let attr = self.shared.file_attr(ino, size);
-                info!("<< lookup {child:?} → virtual file {}ms", _t.elapsed().as_millis());
+                info!("<< lookup {child:?} -> virtual file {}ms", _t.elapsed().as_millis());
                 reply.entry(&Duration::ZERO, &attr, 0);
                 return;
             }
@@ -642,14 +649,14 @@ impl Filesystem for CdFs {
             if real_exists {
                 let ino  = self.ensure_path(&child, true);
                 let attr = self.shared.dir_attr(ino);
-                info!("<< lookup {child:?} → virtual dir {}ms", _t.elapsed().as_millis());
+                info!("<< lookup {child:?} -> virtual dir {}ms", _t.elapsed().as_millis());
                 reply.entry(&TTL, &attr, 0);
                 return;
             }
         }
         // Negative cache: nodeid=0 + TTL tells the kernel to cache "not found"
         // for 60s and stop re-asking. Eliminates .Trash/.sh_thumbnails spam.
-        info!("<< lookup {child:?} → absent (neg-cache) {}ms", _t.elapsed().as_millis());
+        info!("<< lookup {child:?} -> absent (neg-cache) {}ms", _t.elapsed().as_millis());
         reply.entry(&TTL, &ABSENT_ATTR, 0);
     }
 
@@ -658,25 +665,25 @@ impl Filesystem for CdFs {
         let _t = Instant::now();
         self.drain();
         if self.is_dir(ino) {
-            info!("<< getattr ino={ino} → dir {}ms", _t.elapsed().as_millis());
+            info!("<< getattr ino={ino} -> dir {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.dir_attr(ino));
             return;
         }
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
-            None    => { info!("<< getattr ino={ino} → ENOENT {}ms", _t.elapsed().as_millis()); reply.error(ENOENT); return; }
+            None    => { info!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis()); reply.error(ENOENT); return; }
         };
         if let Some(e) = self.shared.vfs.lookup(&path) {
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64)
                 .unwrap_or(e.orig_size as u64);
-            info!("<< getattr ino={ino} → file size={size} {}ms", _t.elapsed().as_millis());
+            info!("<< getattr ino={ino} -> file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.file_attr(ino, size));
         } else if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
             // Overlay-only file (created via create(), not yet in VFS).
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
-            info!("<< getattr ino={ino} → overlay file size={size} {}ms", _t.elapsed().as_millis());
+            info!("<< getattr ino={ino} -> overlay file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, size));
         } else if let Some(vf) = virtual_files::resolve(&path) {
             // Return exact size once decoded (TTL=60s); fall back to source
@@ -691,10 +698,10 @@ impl Filesystem for CdFs {
                     (est, Duration::ZERO)
                 }
             };
-            info!("<< getattr ino={ino} → virtual size={size} {}ms", _t.elapsed().as_millis());
+            info!("<< getattr ino={ino} -> virtual size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&ttl, &self.shared.file_attr(ino, size));
         } else {
-            info!("<< getattr ino={ino} → ENOENT {}ms", _t.elapsed().as_millis());
+            info!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis());
             reply.error(ENOENT);
         }
     }
@@ -734,7 +741,7 @@ impl Filesystem for CdFs {
             let attr = self.shared.file_attr(ino, new_size);
             reply.attr(&Duration::ZERO, &attr);
         } else {
-            // No size change — return current attrs unchanged.
+            // No size change -- return current attrs unchanged.
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64)
                 .or_else(|| self.shared.vfs.lookup(&path).map(|e| e.orig_size as u64))
@@ -763,7 +770,7 @@ impl Filesystem for CdFs {
         let known = self.shared.vfs.lookup(&path).is_some()
             || self.paths.get(&ino).is_some_and(|(_, d)| !*d);
         if !known {
-            warn!("write ino={ino} {path:?} → ENOENT (not in VFS or overlay)");
+            warn!("write ino={ino} {path:?} -> ENOENT (not in VFS or overlay)");
             reply.error(ENOENT);
             return;
         }
@@ -855,7 +862,7 @@ impl Filesystem for CdFs {
                _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
         info!(">> release ino={ino}");
         self.drain();
-        // Overlay stays alive until destroy() — no repack here.
+        // Overlay stays alive until destroy() -- no repack here.
         // Update decode cache so re-opens see current content.
         if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino) {
             self.shared.cache_put(ino, Arc::from(data.as_slice()));
@@ -918,17 +925,17 @@ impl Filesystem for CdFs {
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
             None    => {
-                warn!("<< readdirplus ino={ino} → ENOENT (unknown ino)");
+                warn!("<< readdirplus ino={ino} -> ENOENT (unknown ino)");
                 reply.error(ENOENT); return;
             }
         };
         let slot = self.shared.dir_slot(ino);
         if slot.get().is_some() {
-            info!("<< readdirplus {path:?} offset={offset} → cache hit");
+            info!("<< readdirplus {path:?} offset={offset} -> cache hit");
             serve_readdirplus(slot.get().unwrap(), offset, reply);
             return;
         }
-        info!("readdirplus {path:?} offset={offset} → cold, spawning build");
+        info!("readdirplus {path:?} offset={offset} -> cold, spawning build");
         let shared = Arc::clone(&self.shared);
         rayon::spawn(move || {
             let t = Instant::now();
@@ -971,7 +978,7 @@ impl Filesystem for CdFs {
         if let Some(path) = self.path_of(ino) {
             if virtual_files::resolve(path).is_some() && self.shared.cache_get(ino).is_none() {
                 let path  = path.to_string();
-                info!("open {path:?} → virtual, decoding before reply");
+                info!("open {path:?} -> virtual, decoding before reply");
                 let shared = Arc::clone(&self.shared);
                 let pool   = &shared.decode_pool as *const rayon::ThreadPool;
                 let pool   = unsafe { &*pool };
@@ -984,7 +991,7 @@ impl Filesystem for CdFs {
                 return;
             }
         }
-        info!("<< open ino={ino} → ok");
+        info!("<< open ino={ino} -> ok");
         reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
     }
 
@@ -995,7 +1002,7 @@ impl Filesystem for CdFs {
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
             None    => {
-                warn!("read ino={ino} offset={offset} → ENOENT (unknown ino)");
+                warn!("read ino={ino} offset={offset} -> ENOENT (unknown ino)");
                 reply.error(ENOENT); return;
             }
         };
@@ -1022,8 +1029,8 @@ impl Filesystem for CdFs {
             return;
         }
 
-        // Dedicated decode pool — separate from rayon global pool (dir builds).
-        // Fixed thread count avoids 292K×pthread_create overhead.
+        // Dedicated decode pool -- separate from rayon global pool (dir builds).
+        // Fixed thread count avoids 292Kxpthread_create overhead.
         let shared = Arc::clone(&self.shared);
         // Borrow the pool before moving `shared` into the closure.
         let pool = &shared.decode_pool as *const rayon::ThreadPool;
@@ -1038,18 +1045,18 @@ impl Filesystem for CdFs {
                 Ok(Some(data)) => {
                     let s = (offset as usize).min(data.len());
                     let e = (s + size as usize).min(data.len());
-                    info!("read {path:?} → decoded {}B [{s}..{e}]", data.len());
+                    info!("read {path:?} -> decoded {}B [{s}..{e}]", data.len());
                     reply.data(&data[s..e]);
                 }
                 Ok(None) => {
-                    warn!("read {path:?} → decode returned None");
+                    warn!("read {path:?} -> decode returned None");
                     reply.error(EIO);
                 }
                 Err(e) => {
                     let msg = e.downcast_ref::<&str>().copied()
                         .or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
                         .unwrap_or("unknown panic");
-                    warn!("read {path:?} → decode panicked: {msg}");
+                    warn!("read {path:?} -> decode panicked: {msg}");
                     reply.error(EIO);
                 }
             }

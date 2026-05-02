@@ -78,7 +78,10 @@ fn main() {
             vfs.load_group(g).unwrap_or_else(|e| log::warn!("{e}"));
         }
     } else {
-        let groups = vfs.list_groups().unwrap_or_default();
+        let groups = vfs.list_groups().unwrap_or_else(|e| {
+            log::warn!("list_groups failed: {e}");
+            Vec::new()
+        });
         info!("loading {} groups", groups.len());
         for g in &groups {
             vfs.load_group(g).unwrap_or_else(|e| log::warn!("{e}"));
@@ -97,7 +100,7 @@ fn main() {
     let fs = fs::CdFs::new(vfs, args.readonly);
     let shared = fs.shared();
 
-    // SIGTERM: graceful unmount → destroy() → repack.
+    // SIGTERM: graceful unmount -> destroy() -> repack.
     {
         let mp = mount.to_string();
         std::thread::spawn(move || {
@@ -108,10 +111,12 @@ fn main() {
                 let mut sig: libc::c_int = 0;
                 libc::sigwait(&mask, &mut sig);
             }
-            info!("SIGTERM — graceful unmount");
-            std::process::Command::new("fusermount")
-                .args(["-u", &mp])
-                .status().ok();
+            info!("SIGTERM -- graceful unmount");
+            match std::process::Command::new("fusermount").args(["-u", &mp]).status() {
+                Ok(s) if s.success() => {}
+                Ok(s)  => log::warn!("fusermount -u failed: exit {s}"),
+                Err(e) => log::warn!("fusermount -u error: {e}"),
+            }
         });
     }
 
@@ -139,10 +144,14 @@ fn main() {
             tui::Action::Commit => {
                 drop(shared);
                 eprintln!("Repacking...");
-                std::process::Command::new("fusermount")
-                    .args(["-u", mount])
-                    .status().ok();
-                fuse_thread.join().ok();
+                match std::process::Command::new("fusermount").args(["-u", mount]).status() {
+                    Ok(s) if s.success() => {}
+                    Ok(s)  => eprintln!("fusermount -u failed: exit {s}"),
+                    Err(e) => eprintln!("fusermount -u error: {e}"),
+                }
+                if let Err(e) = fuse_thread.join() {
+                    eprintln!("FUSE session thread panicked: {e:?}");
+                }
             }
             tui::Action::Abort => {
                 drop(shared);
