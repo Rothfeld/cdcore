@@ -581,6 +581,16 @@ impl Filesystem for CdFs {
             reply.entry(&TTL, &attr, 0);
             return;
         }
+        // Overlay-only file: created via create() but not yet in VFS (e.g. temp files).
+        if self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| !*d) {
+            let ino  = self.ensure_path(&child, false);
+            let size = self.shared.write_overlay.lock().unwrap()
+                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
+            let attr = self.shared.file_attr(ino, size);
+            info!("<< lookup {child:?} → overlay file {}ms", _t.elapsed().as_millis());
+            reply.entry(&Duration::ZERO, &attr, 0);
+            return;
+        }
         // Virtual file inside a virtual root tree (e.g. .paloc.jsonl/game/ui.paloc).
         if let Some(vf) = virtual_files::resolve(&child) {
             if self.shared.vfs.lookup(&vf.source_path).is_some() {
