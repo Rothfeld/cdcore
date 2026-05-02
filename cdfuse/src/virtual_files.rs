@@ -35,11 +35,11 @@ use crimsonforge_core::formats::physics::parse_nav;
 /// ".png" for .dds.png/ so bitmap_bell.dds -> bitmap_bell.dds.png and
 /// file managers pick the right MIME type without ambiguity.
 static VIRTUAL_ROOTS: &[(&str, &str, &str)] = &[
-    (".paloc.jsonl",       ".paloc",       ""),
-    (".pabgb.jsonl",       ".pabgb",       ""),
-    (".prefab.jsonl",      ".prefab",      ""),
-    (".paa_metabin.jsonl", ".paa_metabin", ""),
-    (".nav.jsonl",         ".nav",         ""),
+    (".paloc.jsonl",       ".paloc",       ".jsonl"),
+    (".pabgb.jsonl",       ".pabgb",       ".jsonl"),
+    (".prefab.jsonl",      ".prefab",      ".jsonl"),
+    (".paa_metabin.jsonl", ".paa_metabin", ".jsonl"),
+    (".nav.jsonl",         ".nav",         ".jsonl"),
     (".dds.png",           ".dds",         ".png"),
 ];
 
