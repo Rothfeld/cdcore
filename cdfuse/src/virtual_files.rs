@@ -20,6 +20,7 @@
 //!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
 use log::warn;
+use crimsonforge_core::formats::dds::decode_dds_to_rgba;
 use crimsonforge_core::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
 use crimsonforge_core::formats::scene::parse_prefab;
 use crimsonforge_core::formats::animation::parse_paa_metabin;
@@ -34,6 +35,7 @@ static VIRTUAL_ROOTS: &[(&str, &str)] = &[
     (".prefab.jsonl",      ".prefab"),
     (".paa_metabin.jsonl", ".paa_metabin"),
     (".nav.jsonl",         ".nav"),
+    (".dds.png",           ".dds"),
 ];
 
 // -- Public types --------------------------------------------------------------
@@ -45,6 +47,7 @@ pub enum VirtualKind {
     PrefabJsonl,
     PaaMetabinJsonl,
     NavJsonl,
+    DdsPng,
 }
 
 pub struct VirtualFile {
@@ -109,6 +112,7 @@ fn kind_for(ext: &str) -> VirtualKind {
         ".prefab"      => VirtualKind::PrefabJsonl,
         ".paa_metabin" => VirtualKind::PaaMetabinJsonl,
         ".nav"         => VirtualKind::NavJsonl,
+        ".dds"         => VirtualKind::DdsPng,
         _              => unreachable!("unknown virtual ext: {ext}"),
     }
 }
@@ -214,6 +218,23 @@ pub fn render_nav(data: &[u8], path: &str) -> Option<Vec<u8>> {
         out.push_str("}\n");
     }
     Some(out.into_bytes())
+}
+
+/// Decode a DDS texture and return PNG bytes (RGBA8).
+pub fn render_dds_png(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let (width, height, rgba) = decode_dds_to_rgba(data)
+        .map_err(|e| warn!("render_dds_png {path}: {e}")).ok()?;
+
+    let mut buf = Vec::new();
+    let mut enc = png::Encoder::new(&mut buf, width, height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut writer = enc.write_header()
+        .map_err(|e| warn!("render_dds_png {path}: png header: {e}")).ok()?;
+    writer.write_image_data(&rgba)
+        .map_err(|e| warn!("render_dds_png {path}: png data: {e}")).ok()?;
+    drop(writer);
+    Some(buf)
 }
 
 // -- Write-back: JSONL -> binary -----------------------------------------------

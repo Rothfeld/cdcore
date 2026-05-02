@@ -296,6 +296,9 @@ impl SharedFs {
                     virtual_files::VirtualKind::NavJsonl => {
                         virtual_files::render_nav(&src_data, &vf.source_path)?
                     }
+                    virtual_files::VirtualKind::DdsPng => {
+                        virtual_files::render_dds_png(&src_data, &vf.source_path)?
+                    }
                 };
                 return Some(Arc::from(bytes));
             }
