@@ -32,7 +32,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fuser::{
     FileAttr, FileType, Filesystem, KernelConfig,
@@ -110,6 +110,7 @@ pub struct SharedFs {
     in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
     paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
     write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
+    write_mtimes:   Mutex<HashMap<u64, SystemTime>>, // ino -> last write time
     pending_paths:  Mutex<HashMap<u64, String>>,   // ino -> path for TUI display
     repack_engine:  RepackEngine,
     papgt_path:     String,
@@ -143,6 +144,7 @@ impl SharedFs {
             in_flight:     Mutex::new(HashMap::new()),
             paz_maps:      Mutex::new(HashMap::new()),
             write_overlay:  Mutex::new(HashMap::new()),
+            write_mtimes:   Mutex::new(HashMap::new()),
             pending_paths:  Mutex::new(HashMap::new()),
             repack_engine,
             papgt_path,
@@ -162,10 +164,13 @@ impl SharedFs {
     // -- Attr builders ---------------------------------------------------------
 
     fn file_attr(&self, ino: u64, size: u64) -> FileAttr {
+        let mtime = self.write_mtimes.lock().unwrap()
+            .get(&ino).copied()
+            .unwrap_or(UNIX_EPOCH);
         FileAttr {
             ino, size, blocks: (size + 511) / 512,
-            atime: UNIX_EPOCH, mtime: UNIX_EPOCH,
-            ctime: UNIX_EPOCH, crtime: UNIX_EPOCH,
+            atime: mtime, mtime,
+            ctime: mtime, crtime: UNIX_EPOCH,
             kind: FileType::RegularFile,
             perm: if self.readonly { 0o444 } else { 0o644 }, nlink: 1,
             uid: self.uid, gid: self.gid,
@@ -480,6 +485,7 @@ impl SharedFs {
     /// Synchronous repack -- called from destroy() on unmount.
     fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(&ino);
+        self.write_mtimes.lock().unwrap().remove(&ino);
         // Virtual file: convert JSONL back to binary and repack via source path.
         if let Some(vf) = virtual_files::resolve(path) {
             match vf.kind {
@@ -788,9 +794,11 @@ impl Filesystem for CdFs {
             self.shared.write_overlay.lock().unwrap().entry(ino).or_insert(seed);
         }
 
-        // Track for TUI display (insert on first write; or_insert keeps first path).
+        // Track for TUI display and mtime.
         self.shared.pending_paths.lock().unwrap()
             .entry(ino).or_insert_with(|| path.to_string());
+        self.shared.write_mtimes.lock().unwrap()
+            .insert(ino, SystemTime::now());
 
         let offset = offset as usize;
         let mut overlay = self.shared.write_overlay.lock().unwrap();
@@ -910,6 +918,7 @@ impl Filesystem for CdFs {
         let ino = ino_for(&child);
         self.shared.decode_cache.lock().unwrap().pop(&ino);
         self.shared.write_overlay.lock().unwrap().remove(&ino);
+        self.shared.write_mtimes.lock().unwrap().remove(&ino);
         self.shared.pending_paths.lock().unwrap().remove(&ino);
         // Invalidate parent dir cache so the next listing rebuilds without this entry.
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
