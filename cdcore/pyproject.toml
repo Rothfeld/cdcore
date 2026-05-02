@@ -7,7 +7,7 @@ name = "cdcore"
 version = "0.1.0"
 description = "Rust core library for CrimsonForge: VFS, parsers, crypto, repack"
 requires-python = ">=3.10"
-license = { file = "../LICENSE" }
+license = { file = "LICENSE" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Rust",
