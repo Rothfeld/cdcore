@@ -136,9 +136,27 @@ fn main() {
     // Non-interactive (piped/scripted): block in main thread as before.
     if std::io::stdin().is_terminal() {
         let mount_str = mount.to_string();
+        // Channel used only at startup to detect immediate mount failures
+        // (e.g. stale mount point) before the TUI is shown.
+        let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<()>>();
         let fuse_thread = std::thread::spawn(move || {
-            fuser::mount2(fs, &mount_str, &options)
+            let r = fuser::mount2(fs, &mount_str, &options);
+            tx.send(r).ok();
         });
+
+        // Give mount2 up to 200ms to fail.  If it does, report the error and
+        // exit before the TUI is opened so the message is readable.
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(Err(e)) => {
+                log::error!("mount failed: {e}");
+                eprintln!("mount failed: {e}");
+                fuse_thread.join().ok();
+                std::process::exit(1);
+            }
+            // Ok(Ok(())) = mount succeeded AND returned already (unmounted immediately).
+            // Err(Timeout) = still running after 200ms = normal startup.
+            _ => {}
+        }
 
         match tui::run(mount, Arc::clone(&shared)) {
             tui::Action::Commit => {
