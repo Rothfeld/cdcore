@@ -16,6 +16,7 @@ env_logger = "0.11"                                       # RUST_LOG env-var log
 lru = "0.18"                                              # LRU decode cache with per-entry eviction
 memmap2 = "0.9"                                           # memory-mapped PAZ files — zero syscalls per read
 rayon = "1"                                               # dedicated thread pool for concurrent file decodes
+ctrlc = "3"                                               # Ctrl-C handler for clean unmount + destroy()
 
 
 [profile.release]

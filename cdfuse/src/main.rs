@@ -63,6 +63,18 @@ fn main() {
         options.push(fuser::MountOption::RO);
     }
 
+    // Ctrl-C: call fusermount -u so the kernel closes the FUSE fd, mount2()
+    // returns, and fuser calls destroy() — which flushes pending writes.
+    {
+        let mount = args.mount.clone();
+        ctrlc::set_handler(move || {
+            std::process::Command::new("fusermount")
+                .args(["-u", &mount])
+                .status()
+                .ok();
+        }).expect("failed to set Ctrl-C handler");
+    }
+
     info!("mounting {} at {} ({})", args.packages, args.mount,
           if args.readonly { "ro" } else { "rw" });
     fuser::mount2(fs, &args.mount, &options).unwrap_or_else(|e| {
