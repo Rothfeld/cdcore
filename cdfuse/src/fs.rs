@@ -798,7 +798,9 @@ impl Filesystem for CdFs {
         let dst_ino = self.ensure_path(&dst, false);
 
         // Move overlay data from src to dst (temp-file → real path).
-        if let Some(data) = self.shared.write_overlay.lock().unwrap().remove(&src_ino) {
+        // Drop the lock before re-acquiring — holding it across the block would deadlock.
+        let moved = self.shared.write_overlay.lock().unwrap().remove(&src_ino);
+        if let Some(data) = moved {
             self.shared.cache_put(dst_ino, Arc::from(data.clone()));
             self.shared.write_overlay.lock().unwrap().insert(dst_ino, data);
         }
