@@ -5,6 +5,9 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
 
   # Build cdcore Python wheels for each platform/arch combination.
@@ -20,7 +23,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: PyO3/maturin-action@v1
         with:
@@ -50,7 +53,7 @@ jobs:
   cdfuse-binary:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install libfuse3 (required by the fuser crate)
         run: sudo apt-get install -y libfuse3-dev
