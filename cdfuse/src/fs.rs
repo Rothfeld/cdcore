@@ -75,6 +75,35 @@ macro_rules! timed {
     }};
 }
 
+// -- PNG header builder -------------------------------------------------------
+
+/// Build a 33-byte PNG stub: signature + IHDR chunk (RGBA8, no interlace).
+/// Used to answer MIME-detection reads without a full DDS decode.
+fn build_png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut v = Vec::with_capacity(33);
+    v.extend_from_slice(b"\x89PNG\r\n\x1a\n");          // 8-byte sig
+    v.extend_from_slice(&13u32.to_be_bytes());           // IHDR data length
+    let ihdr_start = v.len();
+    v.extend_from_slice(b"IHDR");
+    v.extend_from_slice(&width.to_be_bytes());
+    v.extend_from_slice(&height.to_be_bytes());
+    v.extend_from_slice(&[8, 6, 0, 0, 0]);              // depth=8 type=6(RGBA)
+    let crc = png_crc32(&v[ihdr_start..]);
+    v.extend_from_slice(&crc.to_be_bytes());
+    v
+}
+
+fn png_crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
 // -- Inode helpers -------------------------------------------------------------
 
 fn ino_for(path: &str) -> u64 {
@@ -352,6 +381,22 @@ impl SharedFs {
     // -- Probe read (mmap slice) ------------------------------------------------
 
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
+        // For uncached DDS virtual files opened read-only: return a valid PNG
+        // header (signature + IHDR) so MIME detection sees image/png without
+        // triggering a full DDS decode.  Real dimensions are read cheaply from
+        // the DDS header via the existing mmap pool.
+        if offset == 0 {
+            if let Some(vf) = virtual_files::resolve(path) {
+                if matches!(vf.kind, virtual_files::VirtualKind::DdsPng)
+                    && self.cache_get(ino).is_none()
+                    && !self.write_overlay.lock().unwrap().contains_key(&ino)
+                {
+                    let hdr = self.dds_png_stub_header(&vf.source_path);
+                    let n   = (size as usize).min(hdr.len());
+                    return Some(hdr[..n].to_vec());
+                }
+            }
+        }
         // Virtual files are synthesised -- no raw PAZ slice to serve.
         if virtual_files::resolve(path).is_some() { return None; }
         // Pending writes -- serve from overlay, not stale PAZ bytes.
@@ -513,6 +558,36 @@ impl SharedFs {
         let n = entries.len().saturating_sub(2);
         info!("readdir (virtual) {path:?} -> {n} entries");
         entries
+    }
+
+    /// Build a minimal PNG header (sig + IHDR) for a DDS source file.
+    /// Reads the first 20 bytes of the DDS from the mmap to get real dimensions;
+    /// falls back to 1x1 if the entry is unavailable or the header is unreadable.
+    fn dds_png_stub_header(&self, dds_path: &str) -> Vec<u8> {
+        let entry = match self.vfs.lookup(dds_path) {
+            Some(e) => e,
+            None    => return build_png_header(1, 1),
+        };
+        let mmap = match self.get_mmap(&entry.paz_file) {
+            Some(m) => m,
+            None    => return build_png_header(1, 1),
+        };
+        let start = entry.offset as usize;
+        let end   = (start + 200).min(mmap.len());
+        if start + 20 > mmap.len() { return build_png_header(1, 1); }
+
+        let mut buf = mmap[start..end].to_vec();
+        if entry.encrypted() {
+            let bn = Path::new(dds_path).file_name()
+                .and_then(|n| n.to_str()).unwrap_or(dds_path);
+            crypto::decrypt_inplace(&mut buf, bn);
+        }
+        if buf.len() < 20 || &buf[..4] != b"DDS " {
+            return build_png_header(1, 1);
+        }
+        let h = u32::from_le_bytes(buf[12..16].try_into().unwrap());
+        let w = u32::from_le_bytes(buf[16..20].try_into().unwrap());
+        build_png_header(w, h)
     }
 
     /// Synchronous repack -- called from destroy() on unmount.
@@ -1046,23 +1121,27 @@ impl Filesystem for CdFs {
             reply.error(libc::EISDIR);
             return;
         }
-        // For uncached virtual files, decode before replying.  Deferring the reply
-        // until the content is in the cache means the fstat() that editors do
-        // immediately after open() returns the exact size, not the estimate.
-        if let Some(path) = self.path_of(ino) {
-            if virtual_files::resolve(path).is_some() && self.shared.cache_get(ino).is_none() {
-                let path  = path.to_string();
-                info!("open {path:?} -> virtual, decoding before reply");
-                let shared = Arc::clone(&self.shared);
-                let pool   = &shared.decode_pool as *const rayon::ThreadPool;
-                let pool   = unsafe { &*pool };
-                pool.spawn(move || {
-                    let t = Instant::now();
-                    shared.decode(ino, &path);
-                    debug!("<< open {path:?} virtual decode done {}ms", t.elapsed().as_millis());
-                    reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
-                });
-                return;
+        // For uncached virtual files opened for writing, decode before replying
+        // so that fstat() returns the exact size immediately after open().
+        // Read-only opens skip the eager decode: probe() returns the PNG
+        // signature instantly so MIME detection doesn't trigger a full decode.
+        let is_write = (_flags & libc::O_WRONLY != 0) || (_flags & libc::O_RDWR != 0);
+        if is_write {
+            if let Some(path) = self.path_of(ino) {
+                if virtual_files::resolve(path).is_some() && self.shared.cache_get(ino).is_none() {
+                    let path   = path.to_string();
+                    info!("open {path:?} -> virtual write, decoding before reply");
+                    let shared = Arc::clone(&self.shared);
+                    let pool   = &shared.decode_pool as *const rayon::ThreadPool;
+                    let pool   = unsafe { &*pool };
+                    pool.spawn(move || {
+                        let t = Instant::now();
+                        shared.decode(ino, &path);
+                        debug!("<< open {path:?} virtual decode done {}ms", t.elapsed().as_millis());
+                        reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
+                    });
+                    return;
+                }
             }
         }
         debug!("<< open ino={ino} -> ok");
