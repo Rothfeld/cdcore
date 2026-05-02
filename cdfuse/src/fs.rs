@@ -542,7 +542,7 @@ impl Filesystem for CdFs {
             reply.entry(&TTL, &attr, 0);
             return;
         }
-        if !self.shared.vfs.list_dir(&child).is_empty()
+        if self.shared.vfs.dir_exists(&child)
             || self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| *d)
         {
             let ino  = self.ensure_path(&child, true);

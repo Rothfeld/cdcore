@@ -203,6 +203,17 @@ impl VfsManager {
         seen.into_iter().map(|(n, (d, s))| (n, d, s)).collect()
     }
 
+    /// Returns `true` if `path` is a non-empty directory in the VFS.
+    /// O(log n) — seeks to the first entry under the prefix, checks one node.
+    pub fn dir_exists(&self, path: &str) -> bool {
+        let prefix = format!("{}/", path.replace('\\', "/"));
+        let tree = self.tree.read().unwrap();
+        tree.range(prefix.clone()..)
+            .next()
+            .map(|(k, _)| k.starts_with(&prefix))
+            .unwrap_or(false)
+    }
+
     /// Returns `true` if any file under `dir` (recursively) has a path ending
     /// with `ext`.  Uses a single BTreeMap range scan and exits on first match.
     pub fn subtree_has_ext(&self, dir: &str, ext: &str) -> bool {
