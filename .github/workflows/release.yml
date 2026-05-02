@@ -30,7 +30,8 @@ jobs:
       # shell: bash works on all platforms via Git Bash on Windows.
       - shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${GITHUB_REF_NAME#v}"   # strip leading v  (v0.1.7 -> 0.1.7)
+          VERSION="${VERSION#.}"            # strip leading dot if present (v.0.1.7 -> 0.1.7)
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" cdcore/Cargo.toml
 
       - uses: PyO3/maturin-action@v1
