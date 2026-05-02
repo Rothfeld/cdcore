@@ -1,13 +1,18 @@
-use std::io::{self, Write};
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::{
-    cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute, queue,
-    style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::{self, ClearType},
+    terminal,
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+    Terminal,
 };
 
 use crate::fs::SharedFs;
@@ -15,33 +20,38 @@ use crate::fs::SharedFs;
 pub enum Action { Commit, Abort }
 
 pub fn run(mount: &str, shared: Arc<SharedFs>) -> Action {
-    let mut out = io::stdout();
     terminal::enable_raw_mode().expect("enable raw mode");
-    execute!(out, terminal::EnterAlternateScreen, cursor::Hide).ok();
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, terminal::EnterAlternateScreen).ok();
 
-    let action = event_loop(mount, &shared, &mut out);
+    let backend  = CrosstermBackend::new(io::stdout());
+    let mut term = Terminal::new(backend).expect("create terminal");
 
-    execute!(out, terminal::LeaveAlternateScreen, cursor::Show).ok();
+    let action = event_loop(mount, &shared, &mut term);
+
+    crossterm::execute!(io::stdout(), terminal::LeaveAlternateScreen).ok();
     terminal::disable_raw_mode().ok();
     action
 }
 
-fn event_loop(mount: &str, shared: &Arc<SharedFs>, out: &mut impl Write) -> Action {
+fn event_loop(
+    mount: &str,
+    shared: &Arc<SharedFs>,
+    term: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> Action {
     loop {
-        draw(mount, shared, out);
+        let pending = shared.pending_write_paths();
+        term.draw(|f| draw(f, mount, &pending)).ok();
 
-        if event::poll(Duration::from_millis(500)).unwrap_or(false) {
+        if event::poll(Duration::from_millis(250)).unwrap_or(false) {
             if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = event::read() {
-                match code {
-                    KeyCode::Char('c') | KeyCode::Char('C') => {
-                        return Action::Commit;
-                    }
-                    KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
-                        return Action::Abort;
-                    }
-                    KeyCode::Char('c') if modifiers == KeyModifiers::CONTROL => {
-                        return Action::Abort;
-                    }
+                match (code, modifiers) {
+                    (KeyCode::Char('c'), KeyModifiers::NONE)
+                    | (KeyCode::Char('C'), KeyModifiers::NONE) => return Action::Commit,
+                    (KeyCode::Char('q'), _)
+                    | (KeyCode::Char('Q'), _)
+                    | (KeyCode::Esc,      _)
+                    | (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Action::Abort,
                     _ => {}
                 }
             }
@@ -49,68 +59,62 @@ fn event_loop(mount: &str, shared: &Arc<SharedFs>, out: &mut impl Write) -> Acti
     }
 }
 
-fn draw(mount: &str, shared: &Arc<SharedFs>, out: &mut impl Write) {
-    let pending = shared.pending_write_paths();
-    let (cols, rows) = terminal::size().unwrap_or((80, 24));
+fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String]) {
+    let area = f.area();
 
-    queue!(out,
-        terminal::Clear(ClearType::All),
-        cursor::MoveTo(0, 0),
-    ).ok();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // header
+            Constraint::Min(0),     // body
+            Constraint::Length(3),  // footer
+        ])
+        .split(area);
 
-    // Header
-    let title = format!("cdfuse  {}  (rw)", mount);
-    queue!(out,
-        SetForegroundColor(Color::White),
-        Print(&title),
-        ResetColor,
-        Print("\r\n\r\n"),
-    ).ok();
+    // ── Header ────────────────────────────────────────────────────────────────
+    let header = Paragraph::new(Line::from(vec![
+        Span::raw(" "),
+        Span::styled("cdfuse", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled(mount, Style::default().fg(Color::Cyan)),
+        Span::raw("  (rw)"),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    f.render_widget(header, chunks[0]);
 
-    // Pending writes
-    if pending.is_empty() {
-        queue!(out,
-            SetForegroundColor(Color::DarkGrey),
-            Print("  No pending writes.\r\n"),
-            ResetColor,
-        ).ok();
+    // ── Body ──────────────────────────────────────────────────────────────────
+    let items: Vec<ListItem> = if pending.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            " No pending writes.",
+            Style::default().fg(Color::DarkGray),
+        )))]
     } else {
-        queue!(out,
-            SetForegroundColor(Color::Yellow),
-            Print(format!("  Pending writes: {}\r\n\r\n", pending.len())),
-            ResetColor,
-        ).ok();
-        let max_show = (rows as usize).saturating_sub(8);
-        for path in pending.iter().take(max_show) {
-            let display = truncate(path, cols as usize - 6);
-            queue!(out, Print(format!("    {display}\r\n"))).ok();
-        }
-        if pending.len() > max_show {
-            queue!(out, Print(format!("    ... and {} more\r\n", pending.len() - max_show))).ok();
-        }
-    }
+        pending.iter().map(|p| {
+            ListItem::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(p, Style::default().fg(Color::Yellow)),
+            ]))
+        }).collect()
+    };
 
-    // Footer
-    let footer_row = rows.saturating_sub(3);
-    queue!(out,
-        cursor::MoveTo(0, footer_row),
-        SetForegroundColor(Color::DarkGrey),
-        Print("  "),
-        ResetColor,
-        SetForegroundColor(Color::Green),
-        Print("[c]"),
-        ResetColor,
-        Print(" commit and repack    "),
-        SetForegroundColor(Color::Red),
-        Print("[q]"),
-        ResetColor,
-        Print(" quit without saving\r\n"),
-    ).ok();
+    let title = if pending.is_empty() {
+        " Pending writes ".to_string()
+    } else {
+        format!(" Pending writes: {} ", pending.len())
+    };
 
-    out.flush().ok();
-}
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title));
+    f.render_widget(list, chunks[1]);
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { return s.to_string(); }
-    format!("...{}", &s[s.len().saturating_sub(max - 3)..])
+    // ── Footer ────────────────────────────────────────────────────────────────
+    let footer = Paragraph::new(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("[c]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::raw(" commit and repack    "),
+        Span::styled("[q]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::raw(" quit without saving"),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    f.render_widget(footer, chunks[2]);
 }
