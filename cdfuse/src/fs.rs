@@ -134,7 +134,7 @@ impl SharedFs {
             atime: UNIX_EPOCH, mtime: UNIX_EPOCH,
             ctime: UNIX_EPOCH, crtime: UNIX_EPOCH,
             kind: FileType::RegularFile,
-            perm: 0o444, nlink: 1,
+            perm: 0o644, nlink: 1,
             uid: self.uid, gid: self.gid,
             rdev: 0, blksize: 4096, flags: 0,
         }
