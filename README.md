@@ -4,12 +4,12 @@
 
 Rust library exposed to Python via [PyO3](https://pyo3.rs).
 
-- **VFS** — unified read access to the 1.4M+ game files across all PAZ archives
-- **Parsers** — PAM/PAC/PAMLOD meshes, PAA animations, PAB skeletons, PABC morph targets, PABC skin palettes, HKX physics, NAV navigation meshes, PALOC localization, PABGB game data tables, prefabs
-- **DDS decode** — BC1–BC7, BGRA32, Luminance8/16, DX10 extended header
-- **Crypto** — ChaCha20 (filename-based key derivation) + Bob Jenkins PaChecksum
-- **Compression** — LZ4 block, zlib, Type-1 PAR per-section LZ4
-- **Repack** — atomic 13-step pipeline: compress -> encrypt -> append PAZ -> update PAMT -> update PAPGT -> verify checksum chain
+- **VFS** -- unified read/write access to 1.4M+ game files across PAZ archives
+- **Parsers** -- PAM/PAC/PAMLOD meshes, PAA animations, PAB skeletons, PABC morph targets, PABC skin palettes, HKX physics, NAV navigation meshes, PALOC localisation, PABGB game data tables, prefabs
+- **DDS decode** -- BC1-BC7, BC6H HDR, BGRA32, Luminance, float formats, DX10 extended header
+- **Crypto** -- ChaCha20 (filename-based key derivation) + Bob Jenkins PaChecksum
+- **Compression** -- LZ4 block, zlib, Type-1 PAR per-section LZ4
+- **Repack** -- atomic 13-step pipeline: compress -> encrypt -> append PAZ -> update PAMT -> update PAPGT -> verify checksum chain
 
 **Build and install:**
 ```bash
@@ -31,25 +31,15 @@ mesh  = cf.parse_pam(data, "cd_gimmick_statue_09_ball.pam")
 print(mesh.total_vertices, mesh.total_faces)
 
 paloc = cf.parse_paloc(vfs.read_entry(vfs.lookup("gamedata/localizationstring_eng.paloc")))
-print(paloc.lookup("262897"))      # 'Unavailable while mounted.'
+print(paloc.lookup("262897"))      # "Unavailable while mounted."
 
-# DDS decode
 w, h, rgba = cf.decode_dds_to_rgba(dds_bytes)
 
-# PABC morph targets
-morph = cf.parse_pabc(pabc_bytes)
-print(morph.count, morph.row_floats_hint)  # e.g. 178, 49
-
-# PABC skin palette (per-mesh bone slot -> PAB bone index)
+morph   = cf.parse_pabc(pabc_bytes)
 palette = cf.parse_skin_pabc(pabc_bytes, pab_hashes, "mesh.pabc")
-bone_idx = palette.slot_to_pab(17)
 ```
 
 **Transparent Python integration:**
-
-When the wheel is installed and imported before `core.vfs_manager` or `core.dds_reader`,
-it silently injects Rust-backed implementations into `sys.modules`. Existing Python code
-requires no changes:
 
 ```python
 import crimsonforge_core  # inject first
@@ -62,7 +52,10 @@ from core.dds_reader import decode_dds_to_rgba  # -> Rust decoder
 
 ### `cdfuse`
 
-Read-only FUSE filesystem that mounts Crimson Desert archives as a Linux directory tree. Files are transparently decrypted and decompressed on access.
+FUSE filesystem that mounts Crimson Desert archives as a Linux directory tree.
+Files are transparently decrypted and decompressed on access.
+Supports read-write: drag-and-drop files in, edit files in place, changes
+are repacked into the PAZ archives on unmount.
 
 **Requirements:** `libfuse3`, `user_allow_other` in `/etc/fuse.conf`.
 
@@ -72,37 +65,89 @@ cd cdfuse
 cargo build --release
 ```
 
-**Mount:**
+**Mount (interactive TUI):**
 ```bash
-# Mount all groups
 ./target/release/cdfuse /path/to/crimson_desert_install_dir /mnt/cd
-
-# Mount specific groups only
-./target/release/cdfuse /path/to/crimson_desert_install_dir /mnt/cd --groups 0000,0001
-
-# Unmount
-fusermount3 -u /mnt/cd
 ```
 
-Once mounted the full archive tree is browsable:
+Starts a TUI showing pending writes.
+- `[s]` -- repack pending writes to PAZ, keep mounted
+- `[c]` -- repack and exit
+- `[q]` -- exit without saving
+
+**Mount (non-interactive / scripted):**
+```bash
+./target/release/cdfuse /path/to/crimson_desert_install_dir /mnt/cd 2>>cdfuse.log &
+
+# Repack and unmount when done
+./target/release/cdfuse --unmount /mnt/cd
+
+# Mount read-only
+./target/release/cdfuse /path/to/crimson_desert_install_dir /mnt/cd --readonly
+```
+
+Ctrl-C aborts without repacking. SIGTERM triggers graceful repack and exit.
+
+**Archive tree:**
 ```
 /mnt/cd/
   character/
     cd_phm_basic_00_00_roofclimb_base_std_lantern_b_7_ing_00.paa
     cd_r0002_00_horse_hair_mane_00_0002_index05.prefab
-    ...
+  gamedata/
+    localizationstring_eng.paloc
+    actionpointinfo.pabgb
+    actionpointinfo.pabgh
   object/
     cd_gimmick_statue_09_ball.pam
-    03_cube.hkx
-    ...
-  sound/
-  texture/
+  ui/
+    bitmap_bell.dds
   ...
 ```
+
+**Virtual read-only views (non-binary formats):**
+
+Hidden root directories expose binary files as human-readable text without
+modifying the archives. Each mirrors the full tree and only contains
+relevant files.
+
+```
+/mnt/cd/.paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl
+/mnt/cd/.pabgb.jsonl/gamedata/actionpointinfo.pabgb.jsonl
+/mnt/cd/.prefab.jsonl/character/cd_r0002_00_horse_hair_mane_00_0002_index05.prefab.jsonl
+/mnt/cd/.nav.jsonl/leveldata/...nav.jsonl
+/mnt/cd/.paa_metabin.jsonl/character/...paa_metabin.jsonl
+/mnt/cd/.dds.png/ui/bitmap_bell.dds.png
+```
+
+`.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts
+it back to the original binary format and queues it for repack.
+
+```bash
+# Edit German localisation
+$EDITOR /mnt/cd/.paloc.jsonl/gamedata/localizationstring_ger.paloc.jsonl
+
+# Edit a texture (opens as PNG, saves back as BC7/DDS on unmount)
+krita /mnt/cd/.dds.png/ui/bitmap_bell.dds.png
+```
+
+**Write via file manager:**
+
+Drag a file onto the mount to replace it. The new content is buffered
+in memory and written to the PAZ archive when you commit (`[s]` or `[c]`).
+
+---
+
+### `ddsthumb`
+
+Nautilus/Thunar thumbnailer for `.dds` files. Installs a `.thumbnailer`
+entry so file managers generate thumbnails for DDS textures.
+
+---
 
 ## Requirements
 
 - Rust 1.70+
 - Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`)
 - [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`)
-- libfuse3 (for `cdfuse`)
+- libfuse3 (for `cdfuse`): `apt install libfuse3-dev`
