@@ -8,11 +8,17 @@ mod virtual_files;
 #[derive(Parser)]
 #[command(name = "cdfuse", about = "Mount Crimson Desert archives as a filesystem")]
 struct Args {
+    /// Unmount and flush pending writes: cdfuse --unmount <mountpoint>
+    #[arg(long, value_name = "MOUNTPOINT", exclusive = true)]
+    unmount: Option<String>,
+
     /// Path to the game install directory (contains 0000/, 0001/, meta/, ...)
-    packages: String,
+    #[arg(required_unless_present = "unmount")]
+    packages: Option<String>,
 
     /// Mount point
-    mount: String,
+    #[arg(required_unless_present = "unmount")]
+    mount: Option<String>,
 
     /// Mount read-only (no writes to PAZ archives)
     #[arg(long)]
@@ -31,7 +37,19 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
 
-    let vfs = VfsManager::new(&args.packages).unwrap_or_else(|e| {
+    // cdfuse --unmount <mountpoint>: flush pending writes and unmount.
+    if let Some(ref mp) = args.unmount {
+        let status = std::process::Command::new("fusermount")
+            .args(["-u", mp])
+            .status()
+            .unwrap_or_else(|e| { eprintln!("fusermount: {e}"); std::process::exit(1); });
+        std::process::exit(if status.success() { 0 } else { 1 });
+    }
+
+    let packages = args.packages.as_deref().unwrap();
+    let mount    = args.mount.as_deref().unwrap();
+
+    let vfs = VfsManager::new(packages).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
@@ -52,10 +70,8 @@ fn main() {
         }
     }
 
-    // Block SIGTERM before any thread is spawned (rayon pool, fuser session)
-    // so all threads inherit the mask and sigwait below receives it exclusively.
-    // Ctrl-C (SIGINT) keeps default behaviour: abort immediately, no repack.
-    // SIGTERM: graceful — fusermount -u triggers destroy() which repacks.
+    // Block SIGTERM before any thread is spawned so all threads inherit the
+    // mask. Ctrl-C (SIGINT) keeps default behaviour: abort, no repack.
     unsafe {
         let mut mask: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&mut mask);
@@ -65,9 +81,9 @@ fn main() {
 
     let fs = fs::CdFs::new(vfs, args.readonly);
 
-    // Graceful shutdown thread: waits for SIGTERM, then unmounts cleanly.
+    // Graceful shutdown thread: SIGTERM → fusermount -u → destroy() → repack.
     {
-        let mount = args.mount.clone();
+        let mp = mount.to_string();
         std::thread::spawn(move || {
             unsafe {
                 let mut mask: libc::sigset_t = std::mem::zeroed();
@@ -78,7 +94,7 @@ fn main() {
             }
             info!("SIGTERM — graceful unmount, repacking pending writes");
             std::process::Command::new("fusermount")
-                .args(["-u", &mount])
+                .args(["-u", &mp])
                 .status()
                 .ok();
         });
@@ -93,9 +109,9 @@ fn main() {
         options.push(fuser::MountOption::RO);
     }
 
-    info!("mounting {} at {} ({})", args.packages, args.mount,
+    info!("mounting {} at {} ({})", packages, mount,
           if args.readonly { "ro" } else { "rw" });
-    fuser::mount2(fs, &args.mount, &options).unwrap_or_else(|e| {
+    fuser::mount2(fs, mount, &options).unwrap_or_else(|e| {
         log::error!("mount failed: {e}");
         std::process::exit(1);
     });
