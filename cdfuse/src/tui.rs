@@ -139,7 +139,11 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String], saving: bool) {
         Span::raw("  "),
         Span::styled("[s]", s_style),
         Span::raw(" save    "),
-        Span::styled("[c]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled("[c]", if pending.is_empty() && !saving {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        }),
         Span::raw(" commit and exit    "),
         Span::styled("[q]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Span::raw(" quit without saving"),
