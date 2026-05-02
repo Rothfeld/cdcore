@@ -155,6 +155,21 @@ impl SharedFs {
         }
     }
 
+    /// Repack all pending writes to PAZ without unmounting.
+    /// Drains write_overlay and pending_paths; mount stays active.
+    pub fn flush_all_pending(&self) {
+        let overlay = std::mem::take(&mut *self.write_overlay.lock().unwrap());
+        let paths   = std::mem::take(&mut *self.pending_paths.lock().unwrap());
+        if overlay.is_empty() { return; }
+        info!("flush_all_pending: flushing {} write(s) to PAZ", overlay.len());
+        for (ino, data) in overlay {
+            match paths.get(&ino) {
+                Some(path) => self.flush_ino_sync(ino, path, data),
+                None       => warn!("flush_all_pending: no path for ino {ino}, skipping"),
+            }
+        }
+    }
+
     pub fn pending_write_paths(&self) -> Vec<String> {
         let mut v: Vec<String> = self.pending_paths.lock().unwrap().values().cloned().collect();
         v.sort();

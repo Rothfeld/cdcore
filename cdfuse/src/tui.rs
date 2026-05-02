@@ -1,5 +1,6 @@
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ratatui::crossterm::{
@@ -41,19 +42,36 @@ fn event_loop(
     shared: &Arc<SharedFs>,
     term: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Action {
+    let saving = Arc::new(AtomicBool::new(false));
+
     loop {
-        let pending = shared.pending_write_paths();
-        term.draw(|f| draw(f, mount, &pending)).ok();
+        let pending   = shared.pending_write_paths();
+        let is_saving = saving.load(Ordering::Relaxed);
+        term.draw(|f| draw(f, mount, &pending, is_saving)).ok();
 
         if event::poll(Duration::from_millis(250)).unwrap_or(false) {
             if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = event::read() {
                 match (code, modifiers) {
                     (KeyCode::Char('c'), KeyModifiers::NONE)
                     | (KeyCode::Char('C'), KeyModifiers::NONE) => return Action::Commit,
+
+                    (KeyCode::Char('s'), _) | (KeyCode::Char('S'), _)
+                        if !is_saving && !pending.is_empty() =>
+                    {
+                        let shared2 = Arc::clone(shared);
+                        let flag    = Arc::clone(&saving);
+                        flag.store(true, Ordering::Relaxed);
+                        std::thread::spawn(move || {
+                            shared2.flush_all_pending();
+                            flag.store(false, Ordering::Relaxed);
+                        });
+                    }
+
                     (KeyCode::Char('q'), _)
                     | (KeyCode::Char('Q'), _)
                     | (KeyCode::Esc,      _)
                     | (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Action::Abort,
+
                     _ => {}
                 }
             }
@@ -61,15 +79,15 @@ fn event_loop(
     }
 }
 
-fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String]) {
+fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String], saving: bool) {
     let area = f.area();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header
-            Constraint::Min(0),     // body
-            Constraint::Length(3),  // footer
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(3),
         ])
         .split(area);
 
@@ -85,24 +103,26 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String]) {
     f.render_widget(header, chunks[0]);
 
     // -- Body ------------------------------------------------------------------
-    let items: Vec<ListItem> = if pending.is_empty() {
-        vec![ListItem::new(Line::from(Span::styled(
+    let (title, items) = if saving {
+        let item = ListItem::new(Line::from(Span::styled(
+            " Repacking to PAZ...",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        (" Saving ".to_string(), vec![item])
+    } else if pending.is_empty() {
+        let item = ListItem::new(Line::from(Span::styled(
             " No pending writes.",
             Style::default().fg(Color::DarkGray),
-        )))]
+        )));
+        (" Pending writes ".to_string(), vec![item])
     } else {
-        pending.iter().map(|p| {
+        let rows = pending.iter().map(|p| {
             ListItem::new(Line::from(vec![
                 Span::raw(" "),
                 Span::styled(p, Style::default().fg(Color::Yellow)),
             ]))
-        }).collect()
-    };
-
-    let title = if pending.is_empty() {
-        " Pending writes ".to_string()
-    } else {
-        format!(" Pending writes: {} ", pending.len())
+        }).collect();
+        (format!(" Pending writes: {} ", pending.len()), rows)
     };
 
     let list = List::new(items)
@@ -110,13 +130,21 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String]) {
     f.render_widget(list, chunks[1]);
 
     // -- Footer ----------------------------------------------------------------
-    let footer = Paragraph::new(Line::from(vec![
-        Span::raw("  "),
+    let mut spans = vec![Span::raw("  ")];
+    if !saving && !pending.is_empty() {
+        spans.extend([
+            Span::styled("[s]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(" save (keep mounted)    "),
+        ]);
+    }
+    spans.extend([
         Span::styled("[c]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Span::raw(" commit and repack    "),
+        Span::raw(" commit and exit    "),
         Span::styled("[q]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Span::raw(" quit without saving"),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+    ]);
+
+    let footer = Paragraph::new(Line::from(spans))
+        .block(Block::default().borders(Borders::ALL));
     f.render_widget(footer, chunks[2]);
 }
