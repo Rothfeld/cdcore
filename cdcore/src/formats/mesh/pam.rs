@@ -18,10 +18,15 @@ use half::f16;
 use crate::error::{read_u32_le, read_f32_le, Result, ParseError};
 
 const PAR_MAGIC: &[u8] = b"PAR ";
-const HDR_MESH_COUNT: usize = 0x10;
-const HDR_BBOX_MIN:   usize = 0x14;
-const HDR_BBOX_MAX:   usize = 0x20;
-const HDR_GEOM_OFF:   usize = 0x3C;
+const HDR_MESH_COUNT:       usize = 0x10;
+const HDR_BBOX_MIN:         usize = 0x14;
+const HDR_BBOX_MAX:         usize = 0x20;
+const HDR_GEOM_OFF:         usize = 0x3C;
+// When non-zero, field 0x44 is the compressed size of the geometry section
+// and field 0x40 is the expected decompressed size.  The geometry must be
+// LZ4-decompressed before parsing vertices and indices.
+const HDR_GEOM_DECOMP_SIZE: usize = 0x40;
+const HDR_GEOM_COMP_SIZE:   usize = 0x44;
 const SUBMESH_TABLE:  usize = 0x410;
 const SUBMESH_STRIDE: usize = 0x218;
 const SUBMESH_TEX_OFF: usize = 0x010;
@@ -56,14 +61,38 @@ pub struct ParsedMesh {
 }
 
 pub fn parse(data: &[u8], filename: &str) -> Result<ParsedMesh> {
-    if data.len() < 0x40 || &data[..4] != PAR_MAGIC {
+    if data.len() < 0x50 || &data[..4] != PAR_MAGIC {
         return Err(ParseError::magic(PAR_MAGIC, &data[..4.min(data.len())], 0));
     }
 
     let bbox_min = read_bbox(data, HDR_BBOX_MIN)?;
     let bbox_max = read_bbox(data, HDR_BBOX_MAX)?;
-    let geom_off = read_u32_le(data, HDR_GEOM_OFF)? as usize;
-    let mesh_count = read_u32_le(data, HDR_MESH_COUNT)? as usize;
+    let geom_off      = read_u32_le(data, HDR_GEOM_OFF)?       as usize;
+    let geom_decomp   = read_u32_le(data, HDR_GEOM_DECOMP_SIZE)? as usize;
+    let geom_comp     = read_u32_le(data, HDR_GEOM_COMP_SIZE)?  as usize;
+    let mesh_count    = read_u32_le(data, HDR_MESH_COUNT)?      as usize;
+
+    // If field 0x44 is non-zero the geometry section is LZ4-compressed.
+    // Decompress it and splice into a temporary buffer so the rest of the
+    // parser sees a flat layout regardless of whether compression was used.
+    let owned: Vec<u8>;
+    let data: &[u8] = if geom_comp != 0 {
+        let comp_end = geom_off + geom_comp;
+        if comp_end > data.len() {
+            return Err(ParseError::eof(geom_off, geom_comp, data.len() - geom_off));
+        }
+        let decompressed = crate::compression::decompress(
+            &data[geom_off..comp_end],
+            geom_decomp,
+            crate::compression::COMP_LZ4,
+        ).map_err(|e| ParseError::Other(format!("{filename}: geometry decompress: {e}")))?;
+        let mut buf = data[..geom_off].to_vec();
+        buf.extend_from_slice(&decompressed);
+        owned = buf;
+        &owned
+    } else {
+        data
+    };
 
     // Read submesh descriptors
     let mut raw_entries: Vec<RawEntry> = Vec::new();
