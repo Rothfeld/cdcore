@@ -640,7 +640,14 @@ impl Filesystem for CdFs {
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64)
                 .unwrap_or(e.orig_size as u64);
+            info!("<< getattr ino={ino} → file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.file_attr(ino, size));
+        } else if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
+            // Overlay-only file (created via create(), not yet in VFS).
+            let size = self.shared.write_overlay.lock().unwrap()
+                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
+            info!("<< getattr ino={ino} → overlay file size={size} {}ms", _t.elapsed().as_millis());
+            reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, size));
         } else if let Some(vf) = virtual_files::resolve(&path) {
             // Return exact size once decoded (TTL=60s); fall back to source
             // orig_size estimate with TTL=0 so the kernel re-queries immediately
@@ -654,8 +661,10 @@ impl Filesystem for CdFs {
                     (est, Duration::ZERO)
                 }
             };
+            info!("<< getattr ino={ino} → virtual size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&ttl, &self.shared.file_attr(ino, size));
         } else {
+            info!("<< getattr ino={ino} → ENOENT {}ms", _t.elapsed().as_millis());
             reply.error(ENOENT);
         }
     }
