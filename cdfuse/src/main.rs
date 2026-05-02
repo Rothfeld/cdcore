@@ -6,13 +6,17 @@ mod fs;
 mod virtual_files;
 
 #[derive(Parser)]
-#[command(name = "cdfuse", about = "Mount Crimson Desert archives as a read-only filesystem")]
+#[command(name = "cdfuse", about = "Mount Crimson Desert archives as a filesystem")]
 struct Args {
-    /// Path to the game install directory (contains 0000/, 0001/, meta/, …)
+    /// Path to the game install directory (contains 0000/, 0001/, meta/, ...)
     packages: String,
 
     /// Mount point
     mount: String,
+
+    /// Mount read-only (no writes to PAZ archives)
+    #[arg(long)]
+    readonly: bool,
 
     /// Load all package groups at mount time (default: lazy per-group load)
     #[arg(long)]
@@ -27,7 +31,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
 
-    let mut vfs = VfsManager::new(&args.packages).unwrap_or_else(|e| {
+    let vfs = VfsManager::new(&args.packages).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
@@ -50,14 +54,17 @@ fn main() {
 
     let fs = fs::CdFs::new(vfs);
 
-    let options = vec![
-        fuser::MountOption::RO,
+    let mut options = vec![
         fuser::MountOption::FSName("cdfuse".to_string()),
         fuser::MountOption::Subtype("cdfuse".to_string()),
         fuser::MountOption::AutoUnmount,
     ];
+    if args.readonly {
+        options.push(fuser::MountOption::RO);
+    }
 
-    info!("mounting {} at {}", args.packages, args.mount);
+    info!("mounting {} at {} ({})", args.packages, args.mount,
+          if args.readonly { "ro" } else { "rw" });
     fuser::mount2(fs, &args.mount, &options).unwrap_or_else(|e| {
         log::error!("mount failed: {e}");
         std::process::exit(1);

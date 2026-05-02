@@ -44,6 +44,7 @@ use lru::LruCache;
 use memmap2::Mmap;
 
 use crimsonforge_core::{VfsManager, crypto, compression};
+use crimsonforge_core::repack::{RepackEngine, ModifiedFile};
 use crate::virtual_files;
 
 const TTL:               Duration = Duration::from_secs(60);
@@ -78,25 +79,31 @@ struct DirEntry {
 // ── SharedFs — state accessed by BOTH session thread and rayon workers ────────
 
 pub struct SharedFs {
-    vfs:          VfsManager,
-    path_queue:   Mutex<Vec<Vec<(u64, Box<str>, bool)>>>,
-    dir_cache:    RwLock<HashMap<u64, Arc<OnceLock<Vec<DirEntry>>>>>,
-    decode_cache: Mutex<LruCache<u64, Arc<[u8]>>>,
-    cached_bytes: AtomicUsize,
-    in_flight:    Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
-    paz_maps:     Mutex<HashMap<String, Arc<Mmap>>>,
+    vfs:           VfsManager,
+    path_queue:    Mutex<Vec<Vec<(u64, Box<str>, bool)>>>,
+    dir_cache:     RwLock<HashMap<u64, Arc<OnceLock<Vec<DirEntry>>>>>,
+    decode_cache:  Mutex<LruCache<u64, Arc<[u8]>>>,
+    cached_bytes:  AtomicUsize,
+    in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
+    paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
+    write_overlay: Mutex<HashMap<u64, Vec<u8>>>,
+    repack_engine: RepackEngine,
+    papgt_path:    String,
     /// Dedicated thread pool for file decodes — separate from the rayon global
     /// pool used by dir builds so decodes are never queued behind dir builds.
     /// Fixed size: avoids the 292K × pthread_create overhead of std::thread::spawn.
-    decode_pool:  rayon::ThreadPool,
-    uid:          u32,
-    gid:          u32,
+    decode_pool:   rayon::ThreadPool,
+    uid:           u32,
+    gid:           u32,
 }
 
 impl SharedFs {
     fn new_inner(vfs: VfsManager) -> Self {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
+        let packages_path = vfs.packages_path().to_string();
+        let papgt_path    = format!("{packages_path}/meta/0.papgt");
+        let repack_engine = RepackEngine::new(&packages_path, None);
         let decode_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(16)
             .thread_name(|i| format!("cdfuse-decode-{i}"))
@@ -104,12 +111,15 @@ impl SharedFs {
             .expect("failed to build decode thread pool");
         SharedFs {
             vfs,
-            path_queue:   Mutex::new(Vec::new()),
-            dir_cache:    RwLock::new(HashMap::new()),
-            decode_cache: Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CACHE_ENTRIES).unwrap())),
-            cached_bytes: AtomicUsize::new(0),
-            in_flight:    Mutex::new(HashMap::new()),
-            paz_maps:     Mutex::new(HashMap::new()),
+            path_queue:    Mutex::new(Vec::new()),
+            dir_cache:     RwLock::new(HashMap::new()),
+            decode_cache:  Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CACHE_ENTRIES).unwrap())),
+            cached_bytes:  AtomicUsize::new(0),
+            in_flight:     Mutex::new(HashMap::new()),
+            paz_maps:      Mutex::new(HashMap::new()),
+            write_overlay: Mutex::new(HashMap::new()),
+            repack_engine,
+            papgt_path,
             decode_pool,
             uid,
             gid,
@@ -274,6 +284,8 @@ impl SharedFs {
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
         // Virtual files are synthesised — no raw PAZ slice to serve.
         if virtual_files::resolve(path).is_some() { return None; }
+        // Pending writes — serve from overlay, not stale PAZ bytes.
+        if self.write_overlay.lock().unwrap().contains_key(&ino) { return None; }
         // Serve raw PAZ bytes only for *partial* offset-0 reads (size < orig_size).
         // This covers MIME detection on large files (Thunar reads 32KB of a 500KB file).
         // For small files where size >= orig_size (whole-file reads), we must serve
@@ -555,7 +567,10 @@ impl Filesystem for CdFs {
             None    => { reply.error(ENOENT); return; }
         };
         if let Some(e) = self.shared.vfs.lookup(&path) {
-            reply.attr(&TTL, &self.shared.file_attr(ino, e.orig_size as u64));
+            let size = self.shared.write_overlay.lock().unwrap()
+                .get(&ino).map(|d| d.len() as u64)
+                .unwrap_or(e.orig_size as u64);
+            reply.attr(&TTL, &self.shared.file_attr(ino, size));
         } else if let Some(vf) = virtual_files::resolve(&path) {
             // Return exact size once decoded (TTL=60s); fall back to source
             // orig_size estimate with TTL=0 so the kernel re-queries immediately
@@ -573,6 +588,133 @@ impl Filesystem for CdFs {
         } else {
             reply.error(ENOENT);
         }
+    }
+
+    fn setattr(&mut self, _req: &Request<'_>, ino: u64, _mode: Option<u32>,
+               _uid: Option<u32>, _gid: Option<u32>, size: Option<u64>,
+               _atime: Option<fuser::TimeOrNow>, _mtime: Option<fuser::TimeOrNow>,
+               _ctime: Option<std::time::SystemTime>, _fh: Option<u64>,
+               _crtime: Option<std::time::SystemTime>, _chgtime: Option<std::time::SystemTime>,
+               _bkuptime: Option<std::time::SystemTime>, _flags: Option<u32>,
+               reply: ReplyAttr) {
+        self.drain();
+        if self.is_dir(ino) { reply.error(libc::EISDIR); return; }
+        let path = match self.path_of(ino) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        // Only handle truncation; ignore all other attr changes.
+        if let Some(new_size) = size {
+            // Seed overlay from current content if not already buffered.
+            let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&ino);
+            if needs_seed {
+                let seed = self.shared.cache_get(ino)
+                    .map(|d| d.to_vec())
+                    .unwrap_or_else(|| {
+                        self.shared.decode(ino, &path)
+                            .map(|d| d.to_vec())
+                            .unwrap_or_default()
+                    });
+                self.shared.write_overlay.lock().unwrap().entry(ino).or_insert(seed);
+            }
+            let mut overlay = self.shared.write_overlay.lock().unwrap();
+            let buf = overlay.get_mut(&ino).unwrap();
+            buf.resize(new_size as usize, 0);
+            let attr = self.shared.file_attr(ino, new_size);
+            reply.attr(&Duration::ZERO, &attr);
+        } else {
+            // No size change — return current attrs unchanged.
+            let size = self.shared.write_overlay.lock().unwrap()
+                .get(&ino).map(|d| d.len() as u64)
+                .or_else(|| self.shared.vfs.lookup(&path).map(|e| e.orig_size as u64))
+                .unwrap_or(0);
+            reply.attr(&TTL, &self.shared.file_attr(ino, size));
+        }
+    }
+
+    fn write(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
+             data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>,
+             reply: fuser::ReplyWrite) {
+        self.drain();
+        let path = match self.path_of(ino) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        if virtual_files::resolve(&path).is_some() {
+            reply.error(libc::EROFS);
+            return;
+        }
+        if self.shared.vfs.lookup(&path).is_none() {
+            reply.error(ENOENT);
+            return;
+        }
+
+        // Seed overlay on first write to this ino.
+        let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&ino);
+        if needs_seed {
+            let seed = self.shared.cache_get(ino)
+                .map(|d| d.to_vec())
+                .unwrap_or_else(|| {
+                    self.shared.decode(ino, &path)
+                        .map(|d| d.to_vec())
+                        .unwrap_or_default()
+                });
+            self.shared.write_overlay.lock().unwrap().entry(ino).or_insert(seed);
+        }
+
+        let offset = offset as usize;
+        let mut overlay = self.shared.write_overlay.lock().unwrap();
+        let buf = overlay.get_mut(&ino).unwrap();
+        let end = offset + data.len();
+        if end > buf.len() { buf.resize(end, 0); }
+        buf[offset..end].copy_from_slice(data);
+        reply.written(data.len() as u32);
+    }
+
+    fn release(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _flags: i32,
+               _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
+        self.drain();
+
+        let pending = self.shared.write_overlay.lock().unwrap().remove(&ino);
+        let Some(data) = pending else { reply.ok(); return; };
+
+        let path = match self.path_of(ino) {
+            Some(p) => p.to_string(),
+            None    => { reply.ok(); return; }
+        };
+        let entry = match self.shared.vfs.lookup(&path) {
+            Some(e) => e,
+            None    => { reply.ok(); return; }
+        };
+        let group_dir = Path::new(&entry.paz_file)
+            .parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+            .unwrap_or("").to_string();
+        let pamt_data = match self.shared.vfs.get_pamt(&group_dir) {
+            Some(p) => p,
+            None    => { warn!("release {path}: no pamt for group {group_dir}"); reply.ok(); return; }
+        };
+
+        // Update decode cache with new content so reads during repack see correct data.
+        self.shared.cache_put(ino, Arc::from(data.clone()));
+
+        // Repack asynchronously; defer reply until done so close() blocks until
+        // the write is durable.
+        let shared     = Arc::clone(&self.shared);
+        let papgt_path = self.shared.papgt_path.clone();
+        let pool = &shared.decode_pool as *const rayon::ThreadPool;
+        let pool = unsafe { &*pool };
+        pool.spawn(move || {
+            let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir };
+            match shared.repack_engine.repack(vec![mf], &papgt_path, true) {
+                Ok(r) if r.success => {
+                    info!("repack {path}: ok");
+                    shared.paz_maps.lock().unwrap().remove(&entry.paz_file);
+                }
+                Ok(r)  => warn!("repack {path}: errors: {:?}", r.errors),
+                Err(e) => warn!("repack {path}: failed: {e}"),
+            }
+            reply.ok();
+        });
     }
 
     fn readdirplus(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
@@ -652,6 +794,17 @@ impl Filesystem for CdFs {
                 reply.error(ENOENT); return;
             }
         };
+
+        // Serve from write overlay if there are pending (unflushed) writes.
+        {
+            let overlay = self.shared.write_overlay.lock().unwrap();
+            if let Some(data) = overlay.get(&ino) {
+                let s = (offset as usize).min(data.len());
+                let e = (s + size as usize).min(data.len());
+                reply.data(&data[s..e]);
+                return;
+            }
+        }
 
         if let Some(raw) = self.shared.probe(ino, offset, size, &path) {
             reply.data(&raw);
