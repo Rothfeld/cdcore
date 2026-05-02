@@ -155,6 +155,13 @@ impl SharedFs {
         }
     }
 
+    /// Discard all pending writes without repacking (used for abort).
+    pub fn discard_pending(&self) {
+        std::mem::take(&mut *self.write_overlay.lock().unwrap());
+        std::mem::take(&mut *self.pending_paths.lock().unwrap());
+        std::mem::take(&mut *self.write_mtimes.lock().unwrap());
+    }
+
     /// Repack all pending writes to PAZ without unmounting.
     /// Drains write_overlay and pending_paths; mount stays active.
     pub fn flush_all_pending(&self) {

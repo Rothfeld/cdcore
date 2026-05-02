@@ -151,8 +151,12 @@ fn main() {
                 session.lock().unwrap().take(); // unmount + blocks until destroy()
             }
             tui::Action::Abort => {
+                // Clear overlay so destroy() has nothing to repack, then drop
+                // the session to unmount cleanly.  process::exit would bypass
+                // BackgroundSession::drop and leave the mount broken.
+                shared.discard_pending();
                 drop(shared);
-                std::process::exit(0);
+                session.lock().unwrap().take();
             }
         }
     } else {
