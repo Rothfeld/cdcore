@@ -140,8 +140,24 @@ in memory and written to the PAZ archive when you commit (`[s]` or `[c]`).
 
 ### `ddsthumb`
 
-Nautilus/Thunar thumbnailer for `.dds` files. Installs a `.thumbnailer`
-entry so file managers generate thumbnails for DDS textures.
+Batch DDS-to-PNG thumbnail generator. Takes a `.dds` file or directory
+(scanned recursively) and writes resized PNGs to an output directory,
+preserving the relative path structure. Handles all formats supported
+by `crimsonforge_core`: BC1-BC7, BC6H, RGBA, float variants.
+
+```bash
+# Single file
+./target/release/ddsthumb ui/bitmap_bell.dds /tmp/thumbs --size 128
+
+# Entire tree
+./target/release/ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
+# Found 18355 DDS files -- generating 256px thumbnails ...
+#   1000/18355  errors=0
+#   ...
+```
+
+Downsampling is nearest-neighbour (point sample). Optimised for size:
+stripped, `opt-level = "z"`, LTO, single codegen unit.
 
 ---
 
