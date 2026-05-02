@@ -44,17 +44,6 @@ Starts a TUI showing pending writes.
 - `[c]` -- repack and exit
 - `[q]` -- exit without saving
 
-**Mount (non-interactive / scripted):**
-```bash
-cdfuse /path/to/crimson_desert_install_dir /mnt/cd 2>>cdfuse.log &
-
-# Repack and unmount when done
-cdfuse --unmount /mnt/cd
-
-# Mount read-only
-cdfuse /path/to/crimson_desert_install_dir /mnt/cd --readonly
-```
-
 
 **Archive tree:**
 ```
@@ -95,7 +84,7 @@ it back to the original binary format and queues it for repack.
 # Edit German localisation
 $EDITOR /mnt/cd/.paloc.jsonl/gamedata/localizationstring_ger.paloc.jsonl
 
-# Edit a texture (opens as PNG, saves back as BC7/DDS on unmount)
+# Edit a texture (opens as PNG, saves back in the original DDS format on unmount)
 krita /mnt/cd/.dds.png/ui/bitmap_bell.dds.png
 ```
 
