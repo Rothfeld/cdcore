@@ -1,31 +1,38 @@
 //! Virtual file layer for the FUSE mount.
 //!
-//! Two hidden root directories are injected at the filesystem root.  Each
-//! mirrors the full VFS directory tree, exposing only files of the matching
-//! extension — readable as JSON rather than their binary encoding:
+//! Hidden root directories injected at the filesystem root, each mirroring
+//! the full VFS directory tree and exposing matching files as JSONL:
 //!
-//!   .paloc.json/   mirrors every .paloc localisation file as JSON
-//!   .pabgb.json/   mirrors every .pabgb game-data table as JSON
-//!                  (only when the paired .pabgh header also exists)
+//!   .paloc.jsonl/        every .paloc localisation file
+//!   .pabgb.jsonl/        every .pabgb game-data table (+ paired .pabgh)
+//!   .prefab.jsonl/       every .prefab scene/character descriptor
+//!   .paa_metabin.jsonl/  every .paa_metabin animation metadata file
+//!   .nav.jsonl/          every .nav navigation mesh
 //!
 //! Example:
-//!   real  game/text/ui.paloc
-//!   view  .paloc.json/game/text/ui.paloc   (content: JSON)
+//!   real  gamedata/text/ui.paloc
+//!   view  .paloc.jsonl/gamedata/text/ui.paloc
 //!
 //! Path taxonomy
 //! ─────────────
-//!   resolve(path)         → Some if path is a readable virtual file
-//!   resolve_virtual_dir() → Some if path is a virtual directory
-//!   virtual_root_dirs()   → iterator over the top-level virtual dir names
+//!   resolve(path)         -> Some if path is a readable virtual file
+//!   resolve_virtual_dir() -> Some if path is a virtual directory
+//!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
 use crimsonforge_core::formats::data::{parse_paloc, parse_pabgb, FieldValue};
+use crimsonforge_core::formats::scene::parse_prefab;
+use crimsonforge_core::formats::animation::parse_paa_metabin;
+use crimsonforge_core::formats::physics::parse_nav;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// (virtual_root_name, source_file_extension)
 static VIRTUAL_ROOTS: &[(&str, &str)] = &[
-    (".paloc.jsonl", ".paloc"),
-    (".pabgb.jsonl", ".pabgb"),
+    (".paloc.jsonl",       ".paloc"),
+    (".pabgb.jsonl",       ".pabgb"),
+    (".prefab.jsonl",      ".prefab"),
+    (".paa_metabin.jsonl", ".paa_metabin"),
+    (".nav.jsonl",         ".nav"),
 ];
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -34,6 +41,9 @@ static VIRTUAL_ROOTS: &[(&str, &str)] = &[
 pub enum VirtualKind {
     PalocJson,
     PabgbJson,
+    PrefabJsonl,
+    PaaMetabinJsonl,
+    NavJsonl,
 }
 
 pub struct VirtualFile {
@@ -92,7 +102,14 @@ pub fn resolve_virtual_dir(path: &str) -> Option<VirtualDirInfo> {
 }
 
 fn kind_for(ext: &str) -> VirtualKind {
-    if ext == ".paloc" { VirtualKind::PalocJson } else { VirtualKind::PabgbJson }
+    match ext {
+        ".paloc"       => VirtualKind::PalocJson,
+        ".pabgb"       => VirtualKind::PabgbJson,
+        ".prefab"      => VirtualKind::PrefabJsonl,
+        ".paa_metabin" => VirtualKind::PaaMetabinJsonl,
+        ".nav"         => VirtualKind::NavJsonl,
+        _              => unreachable!("unknown virtual ext: {ext}"),
+    }
 }
 
 // ── Renderers ─────────────────────────────────────────────────────────────────
@@ -136,6 +153,64 @@ pub fn render_pabgb(pabgh_data: &[u8], pabgb_data: &[u8], path: &str) -> Option<
             if fi < last_field { out.push_str(", "); }
         }
         out.push_str("]}\n");
+    }
+    Some(out.into_bytes())
+}
+
+/// Decode a prefab and return UTF-8 JSONL — one line per string entry.
+pub fn render_prefab(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let parsed = parse_prefab(data, path).ok()?;
+    let mut out = String::new();
+    for s in &parsed.strings {
+        let kind = match s.kind {
+            crimsonforge_core::formats::scene::PrefabStringKind::FileRef      => "FileRef",
+            crimsonforge_core::formats::scene::PrefabStringKind::EnumTag      => "EnumTag",
+            crimsonforge_core::formats::scene::PrefabStringKind::PropertyName => "PropertyName",
+            crimsonforge_core::formats::scene::PrefabStringKind::Unknown      => "Unknown",
+        };
+        out.push_str("{\"kind\": \"");
+        out.push_str(kind);
+        out.push_str("\", \"value\": ");
+        push_json_str(&mut out, &s.value);
+        out.push_str("}\n");
+    }
+    Some(out.into_bytes())
+}
+
+/// Decode a paa_metabin and return UTF-8 JSONL — one line per record.
+pub fn render_paa_metabin(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let parsed = parse_paa_metabin(data, path).ok()?;
+    let mut out = String::new();
+    for r in &parsed.records {
+        out.push_str("{\"offset\": ");
+        out.push_str(&r.offset.to_string());
+        out.push_str(", \"subtype\": ");
+        out.push_str(&r.subtype.to_string());
+        out.push_str(", \"tag\": ");
+        out.push_str(&r.tag.to_string());
+        out.push_str(", \"payload\": \"");
+        for b in &r.payload { out.push_str(&format!("{b:02x}")); }
+        out.push_str("\"}\n");
+    }
+    Some(out.into_bytes())
+}
+
+/// Decode a nav mesh and return UTF-8 JSONL — one line per cell.
+pub fn render_nav(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let parsed = parse_nav(data, path).ok()?;
+    let mut out = String::new();
+    for c in &parsed.cells {
+        out.push_str("{\"cell_id\": ");
+        out.push_str(&c.cell_id.to_string());
+        out.push_str(", \"grid_ref\": \"0x");
+        out.push_str(&format!("{:08X}", c.grid_ref));
+        out.push_str("\", \"flags\": \"0x");
+        out.push_str(&format!("{:08X}", c.flags));
+        out.push_str("\", \"neighbor\": ");
+        out.push_str(&c.neighbor.to_string());
+        out.push_str(", \"tile_x\": ");
+        out.push_str(&c.tile_x.to_string());
+        out.push_str("}\n");
     }
     Some(out.into_bytes())
 }

@@ -217,6 +217,15 @@ impl SharedFs {
                         let pabgh_data = self.decode(pabgh_ino, &pabgh_path)?;
                         virtual_files::render_pabgb(&pabgh_data, &src_data, &vf.source_path)?
                     }
+                    virtual_files::VirtualKind::PrefabJsonl => {
+                        virtual_files::render_prefab(&src_data, &vf.source_path)?
+                    }
+                    virtual_files::VirtualKind::PaaMetabinJsonl => {
+                        virtual_files::render_paa_metabin(&src_data, &vf.source_path)?
+                    }
+                    virtual_files::VirtualKind::NavJsonl => {
+                        virtual_files::render_nav(&src_data, &vf.source_path)?
+                    }
                 };
                 return Some(Arc::from(bytes));
             }
