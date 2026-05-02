@@ -109,9 +109,10 @@ pub struct SharedFs {
     cached_bytes:  AtomicUsize,
     in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
     paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
-    write_overlay: Mutex<HashMap<u64, Vec<u8>>>,
-    repack_engine: RepackEngine,
-    papgt_path:    String,
+    write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
+    pending_paths:  Mutex<HashMap<u64, String>>,   // ino → path for TUI display
+    repack_engine:  RepackEngine,
+    papgt_path:     String,
     /// Dedicated thread pool for file decodes — separate from the rayon global
     /// pool used by dir builds so decodes are never queued behind dir builds.
     /// Fixed size: avoids the 292K × pthread_create overhead of std::thread::spawn.
@@ -141,7 +142,8 @@ impl SharedFs {
             cached_bytes:  AtomicUsize::new(0),
             in_flight:     Mutex::new(HashMap::new()),
             paz_maps:      Mutex::new(HashMap::new()),
-            write_overlay: Mutex::new(HashMap::new()),
+            write_overlay:  Mutex::new(HashMap::new()),
+            pending_paths:  Mutex::new(HashMap::new()),
             repack_engine,
             papgt_path,
             decode_pool,
@@ -149,6 +151,12 @@ impl SharedFs {
             gid,
             readonly,
         }
+    }
+
+    pub fn pending_write_paths(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.pending_paths.lock().unwrap().values().cloned().collect();
+        v.sort();
+        v
     }
 
     // ── Attr builders ─────────────────────────────────────────────────────────
@@ -464,6 +472,7 @@ impl SharedFs {
 
     /// Synchronous repack — called from destroy() on unmount.
     fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
+        self.pending_paths.lock().unwrap().remove(&ino);
         // Virtual file: convert JSONL back to binary and repack via source path.
         if let Some(vf) = virtual_files::resolve(path) {
             match vf.kind {
@@ -517,6 +526,8 @@ pub struct CdFs {
 }
 
 impl CdFs {
+    pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.shared) }
+
     pub fn new(vfs: VfsManager, readonly: bool) -> Self {
         let shared = Arc::new(SharedFs::new_inner(vfs, readonly));
         let mut paths = HashMap::new();
@@ -770,6 +781,10 @@ impl Filesystem for CdFs {
             self.shared.write_overlay.lock().unwrap().entry(ino).or_insert(seed);
         }
 
+        // Track for TUI display (insert on first write; or_insert keeps first path).
+        self.shared.pending_paths.lock().unwrap()
+            .entry(ino).or_insert_with(|| path.to_string());
+
         let offset = offset as usize;
         let mut overlay = self.shared.write_overlay.lock().unwrap();
         let buf = overlay.get_mut(&ino).unwrap();
@@ -818,13 +833,16 @@ impl Filesystem for CdFs {
         let src_ino = ino_for(&src);
         let dst_ino = self.ensure_path(&dst, false);
 
-        // Move overlay data from src to dst (temp-file → real path).
-        // Drop the lock before re-acquiring — holding it across the block would deadlock.
+        // Move overlay data from src to dst.
         let moved = self.shared.write_overlay.lock().unwrap().remove(&src_ino);
         if let Some(data) = moved {
             self.shared.cache_put(dst_ino, Arc::from(data.clone()));
             self.shared.write_overlay.lock().unwrap().insert(dst_ino, data);
         }
+        // Update pending_paths: dst path is the user-visible destination.
+        self.shared.pending_paths.lock().unwrap().remove(&src_ino);
+        self.shared.pending_paths.lock().unwrap()
+            .entry(dst_ino).or_insert_with(|| dst.clone());
 
         // Invalidate dir caches so ls reflects the change.
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&src_parent));
@@ -885,6 +903,7 @@ impl Filesystem for CdFs {
         let ino = ino_for(&child);
         self.shared.decode_cache.lock().unwrap().pop(&ino);
         self.shared.write_overlay.lock().unwrap().remove(&ino);
+        self.shared.pending_paths.lock().unwrap().remove(&ino);
         // Invalidate parent dir cache so the next listing rebuilds without this entry.
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
 

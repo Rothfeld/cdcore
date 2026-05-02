@@ -1,14 +1,18 @@
+use std::io::IsTerminal;
+use std::sync::Arc;
+
 use clap::Parser;
 use log::info;
 use crimsonforge_core::VfsManager;
 
 mod fs;
+mod tui;
 mod virtual_files;
 
 #[derive(Parser)]
 #[command(name = "cdfuse", about = "Mount Crimson Desert archives as a filesystem")]
 struct Args {
-    /// Unmount and flush pending writes: cdfuse --unmount <mountpoint>
+    /// Commit pending writes and unmount: cdfuse --unmount <mountpoint>
     #[arg(long, value_name = "MOUNTPOINT", exclusive = true)]
     unmount: Option<String>,
 
@@ -37,7 +41,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
 
-    // cdfuse --unmount <mountpoint>: flush pending writes and unmount.
+    // cdfuse --unmount <mountpoint>: commit pending writes and unmount.
     if let Some(ref mp) = args.unmount {
         let status = std::process::Command::new("fusermount")
             .args(["-u", mp])
@@ -70,8 +74,8 @@ fn main() {
         }
     }
 
-    // Block SIGTERM before any thread is spawned so all threads inherit the
-    // mask. Ctrl-C (SIGINT) keeps default behaviour: abort, no repack.
+    // Block SIGTERM before any threads are spawned so all inherit the mask.
+    // Ctrl-C (SIGINT) aborts immediately with no repack.
     unsafe {
         let mut mask: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&mut mask);
@@ -80,8 +84,9 @@ fn main() {
     }
 
     let fs = fs::CdFs::new(vfs, args.readonly);
+    let shared = fs.shared();
 
-    // Graceful shutdown thread: SIGTERM → fusermount -u → destroy() → repack.
+    // SIGTERM: graceful unmount → destroy() → repack.
     {
         let mp = mount.to_string();
         std::thread::spawn(move || {
@@ -92,11 +97,10 @@ fn main() {
                 let mut sig: libc::c_int = 0;
                 libc::sigwait(&mask, &mut sig);
             }
-            info!("SIGTERM — graceful unmount, repacking pending writes");
+            info!("SIGTERM — graceful unmount");
             std::process::Command::new("fusermount")
                 .args(["-u", &mp])
-                .status()
-                .ok();
+                .status().ok();
         });
     }
 
@@ -111,8 +115,33 @@ fn main() {
 
     info!("mounting {} at {} ({})", packages, mount,
           if args.readonly { "ro" } else { "rw" });
-    fuser::mount2(fs, mount, &options).unwrap_or_else(|e| {
-        log::error!("mount failed: {e}");
-        std::process::exit(1);
-    });
+
+    // Interactive mode: TUI in main thread, FUSE session in background.
+    // Non-interactive (piped/scripted): block in main thread as before.
+    if std::io::stdin().is_terminal() {
+        let mount_str = mount.to_string();
+        let fuse_thread = std::thread::spawn(move || {
+            fuser::mount2(fs, &mount_str, &options)
+        });
+
+        match tui::run(mount, Arc::clone(&shared)) {
+            tui::Action::Commit => {
+                drop(shared);
+                eprintln!("Repacking...");
+                std::process::Command::new("fusermount")
+                    .args(["-u", mount])
+                    .status().ok();
+                fuse_thread.join().ok();
+            }
+            tui::Action::Abort => {
+                drop(shared);
+                std::process::exit(0);
+            }
+        }
+    } else {
+        fuser::mount2(fs, mount, &options).unwrap_or_else(|e| {
+            log::error!("mount failed: {e}");
+            std::process::exit(1);
+        });
+    }
 }
