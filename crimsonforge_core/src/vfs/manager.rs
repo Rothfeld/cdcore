@@ -263,6 +263,13 @@ impl VfsManager {
         Ok(data)
     }
 
+    /// Remove a single file entry from the in-memory index.
+    /// The PAZ archive is not modified; the file simply becomes invisible.
+    pub fn remove_entry(&self, path: &str) -> bool {
+        let norm = path.replace('\\', "/");
+        self.tree.write().unwrap().remove(&norm).is_some()
+    }
+
     /// Remove all entries belonging to `group_dir` and clear its PAMT cache.
     pub fn invalidate_group(&self, group_dir: &str) {
         let mut tree = self.tree.write().unwrap();

@@ -719,6 +719,35 @@ impl Filesystem for CdFs {
         });
     }
 
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        self.drain();
+        let parent_path = match self.path_of(parent) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        let child = SharedFs::child_path(&parent_path, name);
+
+        if virtual_files::resolve(&child).is_some() {
+            reply.error(libc::EPERM);
+            return;
+        }
+        if self.shared.vfs.lookup(&child).is_none() {
+            reply.error(ENOENT);
+            return;
+        }
+
+        self.shared.vfs.remove_entry(&child);
+
+        let ino = ino_for(&child);
+        self.shared.decode_cache.lock().unwrap().pop(&ino);
+        self.shared.write_overlay.lock().unwrap().remove(&ino);
+        // Invalidate parent dir cache so the next listing rebuilds without this entry.
+        self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
+
+        info!("unlink {child:?} (removed from VFS index; PAZ unchanged)");
+        reply.ok();
+    }
+
     fn readdirplus(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
                    reply: ReplyDirectoryPlus) {
         self.drain();
