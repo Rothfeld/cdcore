@@ -53,6 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install libfuse3 (required by the fuser crate)
+        run: sudo apt-get install -y libfuse3-dev
+
       - run: cargo build --release
         working-directory: cdfuse
 
