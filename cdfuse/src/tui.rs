@@ -130,19 +130,20 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String], saving: bool) {
     f.render_widget(list, chunks[1]);
 
     // -- Footer ----------------------------------------------------------------
-    let mut spans = vec![Span::raw("  ")];
-    if !saving && !pending.is_empty() {
-        spans.extend([
-            Span::styled("[s]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw(" save (keep mounted)    "),
-        ]);
-    }
-    spans.extend([
+    let s_style = if saving || pending.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    };
+    let spans = vec![
+        Span::raw("  "),
+        Span::styled("[s]", s_style),
+        Span::raw(" save    "),
         Span::styled("[c]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         Span::raw(" commit and exit    "),
         Span::styled("[q]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Span::raw(" quit without saving"),
-    ]);
+    ];
 
     let footer = Paragraph::new(Line::from(spans))
         .block(Block::default().borders(Borders::ALL));
