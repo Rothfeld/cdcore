@@ -13,7 +13,8 @@
 
 use crate::error::{read_u32_le, Result, ParseError};
 
-const MAGIC: &[u8] = &[0xFF, 0xFF, 0x04, 0x00, 0x00, 0x00];
+const MAGIC_V3: &[u8] = &[0xFF, 0xFF, 0x03, 0x00, 0x00, 0x00];
+const MAGIC_V4: &[u8] = &[0xFF, 0xFF, 0x04, 0x00, 0x00, 0x00];
 
 /// Classification of a prefab string value.
 #[derive(Debug, Clone, PartialEq)]
@@ -43,8 +44,10 @@ pub struct ParsedPrefab {
 }
 
 pub fn parse(data: &[u8], filename: &str) -> Result<ParsedPrefab> {
-    if data.len() < 14 || &data[..6] != MAGIC {
-        return Err(ParseError::magic(MAGIC, &data[..6.min(data.len())], 0));
+    let magic_ok = data.len() >= 6
+        && (&data[..6] == MAGIC_V3 || &data[..6] == MAGIC_V4);
+    if data.len() < 14 || !magic_ok {
+        return Err(ParseError::magic(MAGIC_V4, &data[..6.min(data.len())], 0));
     }
 
     let file_hash_1     = read_u32_le(data, 6)?;
