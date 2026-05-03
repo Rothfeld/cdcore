@@ -801,15 +801,18 @@ impl FileSystemContext for CdWinFs {
         let n = {
             let mut ov = self.0.write_overlay.lock().unwrap();
             let buf = ov.entry(path.clone()).or_insert_with(Vec::new);
+            // WinFSP sets `offset` to the current EOF position before calling us
+            // when write_to_eof=true, so offset is always the correct write position.
+            // Using write_to_eof to derive `len` was wrong: it produced len=0 and
+            // silently dropped every write issued with WriteToEndOfFile=true.
             let start = if write_to_eof { buf.len() } else { offset as usize };
-            let len   = if write_to_eof { 0 } else { buffer.len() };
             if constrained_io && start > buf.len() {
                 0
             } else {
-                let end = start + len;
+                let end = start + buffer.len();
                 if end > buf.len() { buf.resize(end, 0); }
-                if len > 0 { buf[start..end].copy_from_slice(buffer); }
-                len
+                buf[start..end].copy_from_slice(buffer);
+                buffer.len()
             }
         };
 
