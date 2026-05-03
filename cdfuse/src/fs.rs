@@ -66,6 +66,18 @@ const ABSENT_ATTR: FileAttr = FileAttr {
 };
 
 
+// -- Stub headers for MIME-type sniff reads ------------------------------------
+
+/// 27-byte FBX binary magic so file managers identify the type without
+/// triggering a full mesh parse + FBX conversion on every directory listing.
+fn fbx_magic_stub() -> Vec<u8> {
+    let mut v = Vec::with_capacity(27);
+    v.extend_from_slice(b"Kaydara FBX Binary  \x00");
+    v.extend_from_slice(b"\x1a\x00");
+    v.extend_from_slice(&7400u32.to_le_bytes());
+    v
+}
+
 // -- PNG header builder -------------------------------------------------------
 
 fn build_png_header(width: u32, height: u32) -> Vec<u8> {
@@ -397,13 +409,28 @@ impl SharedFs {
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
         if offset == 0 {
             if let Some(vf) = virtual_files::resolve(path) {
-                if matches!(vf.kind, virtual_files::VirtualKind::DdsPng)
-                    && self.cache_get(ino).is_none()
-                    && !self.write_overlay.lock().unwrap().contains_key(path)
-                {
-                    let hdr = self.dds_png_stub_header(&vf.source_path);
-                    let n   = (size as usize).min(hdr.len());
-                    return Some(hdr[..n].to_vec());
+                let not_cached = self.cache_get(ino).is_none()
+                    && !self.write_overlay.lock().unwrap().contains_key(path);
+                if not_cached {
+                    match vf.kind {
+                        virtual_files::VirtualKind::DdsPng => {
+                            let hdr = self.dds_png_stub_header(&vf.source_path);
+                            let n   = (size as usize).min(hdr.len());
+                            return Some(hdr[..n].to_vec());
+                        }
+                        virtual_files::VirtualKind::PamFbx
+                        | virtual_files::VirtualKind::PamlodFbx
+                        | virtual_files::VirtualKind::PacFbx => {
+                            // Return just the FBX magic bytes so file managers
+                            // can identify the MIME type without triggering a
+                            // full mesh parse+FBX conversion for every file in
+                            // the directory listing (same pattern as DdsPng stub).
+                            let hdr = fbx_magic_stub();
+                            let n   = (size as usize).min(hdr.len());
+                            return Some(hdr[..n].to_vec());
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
