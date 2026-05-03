@@ -629,7 +629,7 @@ fn draw(
         Span::styled("[s]", s_style),
         Span::raw(" save    "),
         Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Span::raw(" quit without saving"),
+        Span::raw(if pending.is_empty() { " quit" } else { " quit without saving" }),
     ]))
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(footer, chunks[3]);
