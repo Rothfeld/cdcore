@@ -123,10 +123,11 @@ pub struct SharedFs {
     repack_engine: RepackEngine,
     papgt_path:    String,
     readonly:      bool,
+    auto_repack:   bool,
 }
 
 impl SharedFs {
-    fn new_inner(vfs: VfsManager, readonly: bool) -> Self {
+    fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
         let repack_engine = RepackEngine::new(&packages_path, None);
@@ -142,6 +143,7 @@ impl SharedFs {
             repack_engine,
             papgt_path,
             readonly,
+            auto_repack,
         }
     }
 
@@ -520,8 +522,8 @@ impl SharedFs {
 pub struct CdWinFs(Arc<SharedFs>);
 
 impl CdWinFs {
-    pub fn new(vfs: VfsManager, readonly: bool) -> Self {
-        CdWinFs(Arc::new(SharedFs::new_inner(vfs, readonly)))
+    pub fn new(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
+        CdWinFs(Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack)))
     }
 
     pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.0) }
@@ -603,8 +605,17 @@ impl FileSystemContext for CdWinFs {
         }
     }
 
-    fn close(&self, _context: Self::FileContext) {
-        // FileCtx (and its DirBuffer) dropped here; nothing else to do.
+    fn close(&self, context: Self::FileContext) {
+        let pending = self.0.pending_paths.lock().unwrap().contains(&context.path);
+        if pending && self.0.auto_repack {
+            if let Some(data) = self.0.write_overlay.lock().unwrap().get(&context.path).cloned() {
+                let shared = Arc::clone(&self.0);
+                let path   = context.path.clone();
+                std::thread::spawn(move || {
+                    shared.flush_path_sync(&path, data);
+                });
+            }
+        }
     }
 
     fn create(

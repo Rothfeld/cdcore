@@ -148,10 +148,11 @@ pub struct SharedFs {
     uid:           u32,
     gid:           u32,
     readonly:      bool,
+    auto_repack:   bool,
 }
 
 impl SharedFs {
-    fn new_inner(vfs: VfsManager, readonly: bool) -> Self {
+    fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
         let packages_path = vfs.packages_path().to_string();
@@ -179,6 +180,7 @@ impl SharedFs {
             uid,
             gid,
             readonly,
+            auto_repack,
         }
     }
 
@@ -634,8 +636,8 @@ pub struct CdFs {
 impl CdFs {
     pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.shared) }
 
-    pub fn new(vfs: VfsManager, readonly: bool) -> Self {
-        let shared = Arc::new(SharedFs::new_inner(vfs, readonly));
+    pub fn new(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
+        let shared = Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack));
         let mut paths = HashMap::new();
         paths.insert(ROOT_INO, (Box::from(""), true));
         CdFs { shared, paths }
@@ -906,6 +908,20 @@ impl Filesystem for CdFs {
     fn release(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _flags: i32,
                _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
         self.drain();
+        let pending = self.shared.pending_paths.lock().unwrap().contains_key(&ino);
+        if pending && self.shared.auto_repack {
+            if let Some(path) = self.path_of(ino) {
+                let path = path.to_string();
+                if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino).cloned() {
+                    let shared = Arc::clone(&self.shared);
+                    self.shared.decode_pool.spawn(move || {
+                        shared.flush_ino_sync(ino, &path, data);
+                    });
+                    reply.ok();
+                    return;
+                }
+            }
+        }
         if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino) {
             self.shared.cache_put(ino, Arc::from(data.as_slice()));
         }

@@ -24,6 +24,10 @@ struct Args {
     #[arg(long)]
     readonly: bool,
 
+    /// Disable automatic repack-to-PAZ when a modified file is closed
+    #[arg(long)]
+    no_auto_repack: bool,
+
     /// Load all package groups at mount time (default: lazy per-group load)
     #[arg(long)]
     preload: bool,
@@ -71,7 +75,7 @@ fn main() {
         }
     }
 
-    let cdfs   = fs::CdWinFs::new(vfs, args.readonly);
+    let cdfs   = fs::CdWinFs::new(vfs, args.readonly, !args.no_auto_repack);
     let shared = cdfs.shared();
 
     let mut volume_params = winfsp::host::VolumeParams::new();
