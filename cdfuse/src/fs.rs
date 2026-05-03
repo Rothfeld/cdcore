@@ -25,7 +25,7 @@
 //!   path_queue   Mutex -- one push per child entry (append to Vec)
 //!   vfs          internally Arc<RwLock<BTreeMap>>, read-only after load
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -136,9 +136,9 @@ pub struct SharedFs {
     cached_bytes:  AtomicUsize,
     in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
     paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
-    write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
-    write_mtimes:   Mutex<HashMap<u64, SystemTime>>,
-    pending_paths:  Mutex<HashMap<u64, String>>,
+    write_overlay:  Mutex<HashMap<String, Vec<u8>>>,
+    write_mtimes:   Mutex<HashMap<String, SystemTime>>,
+    pending_paths:  Mutex<HashSet<String>>,
     repack_engine:  RepackEngine,
     papgt_path:     String,
     /// Dedicated thread pool for file decodes -- separate from the rayon global
@@ -173,7 +173,7 @@ impl SharedFs {
             paz_maps:      Mutex::new(HashMap::new()),
             write_overlay:  Mutex::new(HashMap::new()),
             write_mtimes:   Mutex::new(HashMap::new()),
-            pending_paths:  Mutex::new(HashMap::new()),
+            pending_paths:  Mutex::new(HashSet::new()),
             repack_engine,
             papgt_path,
             decode_pool,
@@ -191,29 +191,28 @@ impl SharedFs {
     }
 
     pub fn flush_all_pending(&self) {
+        let pending = std::mem::take(&mut *self.pending_paths.lock().unwrap());
         let overlay = std::mem::take(&mut *self.write_overlay.lock().unwrap());
-        let paths   = std::mem::take(&mut *self.pending_paths.lock().unwrap());
-        if overlay.is_empty() { return; }
-        info!("flush_all_pending: flushing {} write(s) to PAZ", overlay.len());
-        for (ino, data) in overlay {
-            match paths.get(&ino) {
-                Some(path) => self.flush_ino_sync(ino, path, data),
-                None       => warn!("flush_all_pending: no path for ino {ino}, skipping"),
+        if pending.is_empty() { return; }
+        info!("flush_all_pending: flushing {} write(s) to PAZ", pending.len());
+        for path in &pending {
+            if let Some(data) = overlay.get(path).cloned() {
+                self.flush_path_sync(path, data);
             }
         }
     }
 
     pub fn pending_write_paths(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.pending_paths.lock().unwrap().values().cloned().collect();
+        let mut v: Vec<String> = self.pending_paths.lock().unwrap().iter().cloned().collect();
         v.sort();
         v
     }
 
     // -- Attr builders ---------------------------------------------------------
 
-    fn file_attr(&self, ino: u64, size: u64) -> FileAttr {
+    fn file_attr(&self, ino: u64, path: &str, size: u64) -> FileAttr {
         let mtime = self.write_mtimes.lock().unwrap()
-            .get(&ino).copied()
+            .get(path).copied()
             .unwrap_or(UNIX_EPOCH);
         FileAttr {
             ino, size, blocks: (size + 511) / 512,
@@ -374,13 +373,21 @@ impl SharedFs {
     }
 
     // -- Probe read (mmap slice) ------------------------------------------------
+    // Fast path for reads at offset 0 that request fewer bytes than the full file.
+    // Returns raw compressed bytes directly from the mmap — callers that only want
+    // magic bytes (e.g. `file(1)`, thumbnail generators) get a response without a
+    // full decrypt+decompress cycle.  The bytes are NOT decrypted or decompressed,
+    // which is intentional: the probe is only useful for compressed/encrypted blobs
+    // where the caller accepts raw data.  Any caller that needs real content will
+    // miss the probe conditions (offset != 0, size >= orig_size, cached, overlay
+    // present) and fall through to the full decode path.
 
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
         if offset == 0 {
             if let Some(vf) = virtual_files::resolve(path) {
                 if matches!(vf.kind, virtual_files::VirtualKind::DdsPng)
                     && self.cache_get(ino).is_none()
-                    && !self.write_overlay.lock().unwrap().contains_key(&ino)
+                    && !self.write_overlay.lock().unwrap().contains_key(path)
                 {
                     let hdr = self.dds_png_stub_header(&vf.source_path);
                     let n   = (size as usize).min(hdr.len());
@@ -389,7 +396,7 @@ impl SharedFs {
             }
         }
         if virtual_files::resolve(path).is_some() { return None; }
-        if self.write_overlay.lock().unwrap().contains_key(&ino) { return None; }
+        if self.write_overlay.lock().unwrap().contains_key(path) { return None; }
         if offset != 0 { return None; }
         if self.cache_get(ino).is_some() { return None; }
         let entry = self.vfs.lookup(path)?;
@@ -449,7 +456,7 @@ impl SharedFs {
             let attr = if *is_dir {
                 self.dir_attr(child_ino)
             } else {
-                self.file_attr(child_ino, *orig_size as u64)
+                self.file_attr(child_ino, &child_path, *orig_size as u64)
             };
             queue_batch.push((child_ino, child_path.clone().into(), *is_dir));
             entries.push(DirEntry { ino: child_ino, attr, name: name.clone(),
@@ -517,7 +524,7 @@ impl SharedFs {
                     let vino  = ino_for(&vpath);
                     queue_batch.push((vino, vpath.clone().into(), false));
                     entries.push(DirEntry {
-                        ino: vino, attr: self.file_attr(vino, *orig_size as u64),
+                        ino: vino, attr: self.file_attr(vino, &vpath, *orig_size as u64),
                         name: virt_name, path: vpath.into(), is_dir: false,
                         attr_ttl: Duration::ZERO,
                     });
@@ -559,18 +566,17 @@ impl SharedFs {
         build_png_header(w, h)
     }
 
-    fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
-        self.pending_paths.lock().unwrap().remove(&ino);
-        self.write_mtimes.lock().unwrap().remove(&ino);
+    fn flush_path_sync(&self, path: &str, data: Vec<u8>) {
+        self.pending_paths.lock().unwrap().remove(path);
+        self.write_mtimes.lock().unwrap().remove(path);
         if let Some(vf) = virtual_files::resolve(path) {
             match vf.kind {
                 virtual_files::VirtualKind::PalocJson => {
                     match virtual_files::parse_paloc_jsonl(&data) {
                         Some(binary) => {
-                            let src_ino = ino_for(&vf.source_path);
                             info!("flush {path}: paloc JSONL -> {}B binary, repacking {}",
                                   binary.len(), vf.source_path);
-                            self.flush_ino_sync(src_ino, &vf.source_path, binary);
+                            self.flush_path_sync(&vf.source_path, binary);
                         }
                         None => warn!("flush {path}: paloc JSONL parse failed, skipping"),
                     }
@@ -586,10 +592,9 @@ impl SharedFs {
                     };
                     match virtual_files::parse_png_to_dds(&data, &orig_dds, &vf.source_path) {
                         Some(dds) => {
-                            let src_ino = ino_for(&vf.source_path);
                             info!("flush {path}: PNG -> {}B DDS, repacking {}",
                                   dds.len(), vf.source_path);
-                            self.flush_ino_sync(src_ino, &vf.source_path, dds);
+                            self.flush_path_sync(&vf.source_path, dds);
                         }
                         None => warn!("flush {path}: PNG->DDS conversion failed, skipping"),
                     }
@@ -610,7 +615,7 @@ impl SharedFs {
             Some(p) => p,
             None => { warn!("flush_sync {path}: no pamt for group {group_dir}"); return; }
         };
-        self.cache_put(ino, Arc::from(data.clone()));
+        self.cache_put(ino_for(path), Arc::from(data.clone()));
         let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir.clone() };
         match self.repack_engine.repack(vec![mf], &self.papgt_path, true) {
             Ok(r) if r.success => {
@@ -698,7 +703,7 @@ impl Filesystem for CdFs {
 
         if let Some(entry) = self.shared.vfs.lookup(&child) {
             let ino  = self.ensure_path(&child, false);
-            let attr = self.shared.file_attr(ino, entry.orig_size as u64);
+            let attr = self.shared.file_attr(ino, &child, entry.orig_size as u64);
             reply.entry(&TTL, &attr, 0);
             return;
         }
@@ -717,7 +722,7 @@ impl Filesystem for CdFs {
                     .map(|d| d.len() as u64)
                     .or_else(|| self.shared.vfs.lookup(&vf.source_path).map(|e| e.orig_size as u64))
                     .unwrap_or(0);
-                let attr = self.shared.file_attr(ino, size);
+                let attr = self.shared.file_attr(ino, &child, size);
                 reply.entry(&Duration::ZERO, &attr, 0);
                 return;
             }
@@ -735,8 +740,8 @@ impl Filesystem for CdFs {
         if self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| !*d) {
             let ino  = self.ensure_path(&child, false);
             let size = self.shared.write_overlay.lock().unwrap()
-                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
-            let attr = self.shared.file_attr(ino, size);
+                .get(&child).map(|d| d.len() as u64).unwrap_or(0);
+            let attr = self.shared.file_attr(ino, &child, size);
             reply.entry(&Duration::ZERO, &attr, 0);
             return;
         }
@@ -756,9 +761,9 @@ impl Filesystem for CdFs {
         };
         if let Some(e) = self.shared.vfs.lookup(&path) {
             let size = self.shared.write_overlay.lock().unwrap()
-                .get(&ino).map(|d| d.len() as u64)
+                .get(&path).map(|d| d.len() as u64)
                 .unwrap_or(e.orig_size as u64);
-            reply.attr(&TTL, &self.shared.file_attr(ino, size));
+            reply.attr(&TTL, &self.shared.file_attr(ino, &path, size));
         } else if let Some(vf) = virtual_files::resolve(&path) {
             let (size, ttl) = match self.shared.cache_get(ino) {
                 Some(d) => (d.len() as u64, TTL),
@@ -769,11 +774,11 @@ impl Filesystem for CdFs {
                     (est, Duration::ZERO)
                 }
             };
-            reply.attr(&ttl, &self.shared.file_attr(ino, size));
+            reply.attr(&ttl, &self.shared.file_attr(ino, &path, size));
         } else if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
             let size = self.shared.write_overlay.lock().unwrap()
-                .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
-            reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, size));
+                .get(&path).map(|d| d.len() as u64).unwrap_or(0);
+            reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, &path, size));
         } else {
             reply.error(ENOENT);
         }
@@ -793,7 +798,7 @@ impl Filesystem for CdFs {
             None    => { reply.error(ENOENT); return; }
         };
         if let Some(new_size) = size {
-            let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&ino);
+            let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&path);
             if needs_seed {
                 let seed = self.shared.cache_get(ino)
                     .map(|d| d.to_vec())
@@ -802,19 +807,19 @@ impl Filesystem for CdFs {
                             .map(|d| d.to_vec())
                             .unwrap_or_default()
                     });
-                self.shared.write_overlay.lock().unwrap().entry(ino).or_insert(seed);
+                self.shared.write_overlay.lock().unwrap().entry(path.clone()).or_insert(seed);
             }
             let mut overlay = self.shared.write_overlay.lock().unwrap();
-            let buf = overlay.get_mut(&ino).unwrap();
+            let buf = overlay.get_mut(&path).unwrap();
             buf.resize(new_size as usize, 0);
-            let attr = self.shared.file_attr(ino, new_size);
+            let attr = self.shared.file_attr(ino, &path, new_size);
             reply.attr(&Duration::ZERO, &attr);
         } else {
             let size = self.shared.write_overlay.lock().unwrap()
-                .get(&ino).map(|d| d.len() as u64)
+                .get(&path).map(|d| d.len() as u64)
                 .or_else(|| self.shared.vfs.lookup(&path).map(|e| e.orig_size as u64))
                 .unwrap_or(0);
-            reply.attr(&TTL, &self.shared.file_attr(ino, size));
+            reply.attr(&TTL, &self.shared.file_attr(ino, &path, size));
         }
     }
 
@@ -839,7 +844,7 @@ impl Filesystem for CdFs {
             reply.error(ENOENT);
             return;
         }
-        let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&ino);
+        let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&path);
         if needs_seed {
             let seed = self.shared.cache_get(ino)
                 .map(|d| d.to_vec())
@@ -848,15 +853,13 @@ impl Filesystem for CdFs {
                         .map(|d| d.to_vec())
                         .unwrap_or_default()
                 });
-            self.shared.write_overlay.lock().unwrap().entry(ino).or_insert(seed);
+            self.shared.write_overlay.lock().unwrap().entry(path.clone()).or_insert(seed);
         }
-        self.shared.pending_paths.lock().unwrap()
-            .entry(ino).or_insert_with(|| path.to_string());
-        self.shared.write_mtimes.lock().unwrap()
-            .insert(ino, SystemTime::now());
+        self.shared.pending_paths.lock().unwrap().insert(path.clone());
+        self.shared.write_mtimes.lock().unwrap().insert(path.clone(), SystemTime::now());
         let offset = offset as usize;
         let mut overlay = self.shared.write_overlay.lock().unwrap();
-        let buf = overlay.get_mut(&ino).unwrap();
+        let buf = overlay.get_mut(&path).unwrap();
         let end = offset + data.len();
         if end > buf.len() { buf.resize(end, 0); }
         buf[offset..end].copy_from_slice(data);
@@ -872,8 +875,8 @@ impl Filesystem for CdFs {
         };
         let child = SharedFs::child_path(&parent_path, name);
         let ino = self.ensure_path(&child, false);
-        self.shared.write_overlay.lock().unwrap().entry(ino).or_insert_with(Vec::new);
-        let attr = self.shared.file_attr(ino, 0);
+        self.shared.write_overlay.lock().unwrap().entry(child.clone()).or_insert_with(Vec::new);
+        let attr = self.shared.file_attr(ino, &child, 0);
         reply.created(&Duration::ZERO, &attr, 0, 0, fuser::consts::FOPEN_DIRECT_IO);
     }
 
@@ -890,16 +893,14 @@ impl Filesystem for CdFs {
         };
         let src = SharedFs::child_path(&src_parent, name);
         let dst = SharedFs::child_path(&dst_parent, newname);
-        let src_ino = ino_for(&src);
         let dst_ino = self.ensure_path(&dst, false);
-        let moved = self.shared.write_overlay.lock().unwrap().remove(&src_ino);
+        let moved = self.shared.write_overlay.lock().unwrap().remove(&src);
         if let Some(data) = moved {
             self.shared.cache_put(dst_ino, Arc::from(data.clone()));
-            self.shared.write_overlay.lock().unwrap().insert(dst_ino, data);
+            self.shared.write_overlay.lock().unwrap().insert(dst.clone(), data);
         }
-        self.shared.pending_paths.lock().unwrap().remove(&src_ino);
-        self.shared.pending_paths.lock().unwrap()
-            .entry(dst_ino).or_insert_with(|| dst.clone());
+        self.shared.pending_paths.lock().unwrap().remove(&src);
+        self.shared.pending_paths.lock().unwrap().insert(dst.clone());
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&src_parent));
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&dst_parent));
         reply.ok();
@@ -908,21 +909,22 @@ impl Filesystem for CdFs {
     fn release(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _flags: i32,
                _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
         self.drain();
-        let pending = self.shared.pending_paths.lock().unwrap().contains_key(&ino);
+        let path = match self.path_of(ino) {
+            Some(p) => p.to_string(),
+            None    => { reply.ok(); return; }
+        };
+        let pending = self.shared.pending_paths.lock().unwrap().contains(&path);
         if pending && self.shared.auto_repack {
-            if let Some(path) = self.path_of(ino) {
-                let path = path.to_string();
-                if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino).cloned() {
-                    let shared = Arc::clone(&self.shared);
-                    self.shared.decode_pool.spawn(move || {
-                        shared.flush_ino_sync(ino, &path, data);
-                    });
-                    reply.ok();
-                    return;
-                }
+            if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&path).cloned() {
+                let shared = Arc::clone(&self.shared);
+                self.shared.decode_pool.spawn(move || {
+                    shared.flush_path_sync(&path, data);
+                });
+                reply.ok();
+                return;
             }
         }
-        if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino) {
+        if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&path) {
             self.shared.cache_put(ino, Arc::from(data.as_slice()));
         }
         reply.ok();
@@ -934,13 +936,13 @@ impl Filesystem for CdFs {
     }
 
     fn destroy(&mut self) {
+        let pending = std::mem::take(&mut *self.shared.pending_paths.lock().unwrap());
         let overlay = std::mem::take(&mut *self.shared.write_overlay.lock().unwrap());
-        if overlay.is_empty() { return; }
-        warn!("destroy: flushing {} pending write(s) to PAZ", overlay.len());
-        for (ino, data) in overlay {
-            if let Some(path) = self.path_of(ino) {
-                let path = path.to_string();
-                self.shared.flush_ino_sync(ino, &path, data);
+        if pending.is_empty() { return; }
+        warn!("destroy: flushing {} pending write(s) to PAZ", pending.len());
+        for path in &pending {
+            if let Some(data) = overlay.get(path).cloned() {
+                self.shared.flush_path_sync(path, data);
             }
         }
     }
@@ -955,9 +957,9 @@ impl Filesystem for CdFs {
         let ino = ino_for(&child);
 
         if virtual_files::resolve(&child).is_some() {
-            self.shared.write_overlay.lock().unwrap().remove(&ino);
-            self.shared.write_mtimes.lock().unwrap().remove(&ino);
-            self.shared.pending_paths.lock().unwrap().remove(&ino);
+            self.shared.write_overlay.lock().unwrap().remove(&child);
+            self.shared.write_mtimes.lock().unwrap().remove(&child);
+            self.shared.pending_paths.lock().unwrap().remove(&child);
             self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
             reply.ok();
             return;
@@ -970,9 +972,9 @@ impl Filesystem for CdFs {
         }
         self.shared.vfs.remove_entry(&child);
         self.shared.decode_cache.lock().unwrap().pop(&ino);
-        self.shared.write_overlay.lock().unwrap().remove(&ino);
-        self.shared.write_mtimes.lock().unwrap().remove(&ino);
-        self.shared.pending_paths.lock().unwrap().remove(&ino);
+        self.shared.write_overlay.lock().unwrap().remove(&child);
+        self.shared.write_mtimes.lock().unwrap().remove(&child);
+        self.shared.pending_paths.lock().unwrap().remove(&child);
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
         reply.ok();
     }
@@ -1046,7 +1048,7 @@ impl Filesystem for CdFs {
         };
         {
             let overlay = self.shared.write_overlay.lock().unwrap();
-            if let Some(data) = overlay.get(&ino) {
+            if let Some(data) = overlay.get(&path) {
                 let s = (offset as usize).min(data.len());
                 let e = (s + size as usize).min(data.len());
                 reply.data(&data[s..e]);
