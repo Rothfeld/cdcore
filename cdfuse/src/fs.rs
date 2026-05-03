@@ -26,31 +26,20 @@
 //!   vfs          internally Arc<RwLock<BTreeMap>>, read-only after load
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
-#[cfg(unix)]
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::SystemTime;
-#[cfg(unix)]
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
-use std::ffi::OsStr;
-
-#[cfg(unix)]
 use fuser::{
     FileAttr, FileType, Filesystem, KernelConfig,
     ReplyAttr, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEntry, Request,
 };
-#[cfg(unix)]
 use libc::{ENOENT, EIO};
-
-use log::{info, warn};
-#[cfg(unix)]
-use log::debug;
+use log::{debug, info, warn};
 use lru::LruCache;
 use memmap2::Mmap;
 
@@ -58,19 +47,17 @@ use cdcore::{VfsManager, crypto, compression};
 use cdcore::repack::{RepackEngine, ModifiedFile};
 use crate::virtual_files;
 
+const TTL:               Duration = Duration::from_secs(60);
 const ROOT_INO:          u64     = 1;
 const MAX_CACHE_ENTRIES: usize   = 131_072;
 const MAX_CACHED_BYTES:  usize   = 512 * 1024 * 1024;
 const SLOW_MS:           u128    = 200;  // log warning if a callback takes longer than this
-#[cfg(unix)]
-const TTL:               Duration = Duration::from_secs(60);
 
 // Returned for absent paths instead of reply.error(ENOENT).
 // nodeid=0 tells the kernel to cache the "not found" result for TTL seconds
 // (FUSE negative dentry caching), eliminating repeated lookups for the same
 // absent name (e.g. .Trash, .sh_thumbnails) that otherwise saturate the
 // session thread.
-#[cfg(unix)]
 const ABSENT_ATTR: FileAttr = FileAttr {
     ino: 0, size: 0, blocks: 0,
     atime: UNIX_EPOCH, mtime: UNIX_EPOCH, ctime: UNIX_EPOCH, crtime: UNIX_EPOCH,
@@ -78,7 +65,6 @@ const ABSENT_ATTR: FileAttr = FileAttr {
     perm: 0, nlink: 0, uid: 0, gid: 0, rdev: 0, blksize: 0, flags: 0,
 };
 
-#[cfg(unix)]
 macro_rules! timed {
     ($label:expr, $body:expr) => {{
         let _t = Instant::now();
@@ -91,9 +77,7 @@ macro_rules! timed {
 
 // -- PNG header builder -------------------------------------------------------
 
-/// Build a 33-byte PNG stub: signature + IHDR chunk (RGBA8, no interlace).
-/// Used to answer MIME-detection reads without a full DDS decode.
-pub(crate) fn build_png_header(width: u32, height: u32) -> Vec<u8> {
+fn build_png_header(width: u32, height: u32) -> Vec<u8> {
     let mut v = Vec::with_capacity(33);
     v.extend_from_slice(b"\x89PNG\r\n\x1a\n");          // 8-byte sig
     v.extend_from_slice(&13u32.to_be_bytes());           // IHDR data length
@@ -120,63 +104,55 @@ fn png_crc32(data: &[u8]) -> u32 {
 
 // -- Inode helpers -------------------------------------------------------------
 
-pub(crate) fn ino_for(path: &str) -> u64 {
+fn ino_for(path: &str) -> u64 {
     if path.is_empty() { return ROOT_INO; }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut h);
     h.finish().wrapping_mul(0x9e3779b97f4a7c15).max(2)
 }
 
-#[cfg(unix)]
 fn parent_path(path: &str) -> &str {
     path.rsplit_once('/').map(|(p, _)| p).unwrap_or("")
 }
 
 // -- DirEntry ------------------------------------------------------------------
 
-#[cfg(unix)]
 struct DirEntry {
     ino:      u64,
     attr:     FileAttr,
     name:     String,
-    path:     Box<str>,   // full virtual path -- used by path_queue drain
+    path:     Box<str>,
     is_dir:   bool,
-    attr_ttl: Duration,   // TTL=0 for virtual files so fstat always re-queries getattr
+    attr_ttl: Duration,
 }
 
 // -- SharedFs -- state accessed by BOTH session thread and rayon workers --------
 
 pub struct SharedFs {
-    pub(crate) vfs:            VfsManager,
-    #[cfg(unix)]
+    vfs:           VfsManager,
     path_queue:    Mutex<Vec<Vec<(u64, Box<str>, bool)>>>,
-    #[cfg(unix)]
     dir_cache:     RwLock<HashMap<u64, Arc<OnceLock<Vec<DirEntry>>>>>,
-    pub(crate) decode_cache:  Mutex<LruCache<u64, Arc<[u8]>>>,
+    decode_cache:  Mutex<LruCache<u64, Arc<[u8]>>>,
     cached_bytes:  AtomicUsize,
-    pub(crate) in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
+    in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
     paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
-    pub(crate) write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
-    pub(crate) write_mtimes:   Mutex<HashMap<u64, SystemTime>>,
-    pub(crate) pending_paths:  Mutex<HashMap<u64, String>>,
+    write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
+    write_mtimes:   Mutex<HashMap<u64, SystemTime>>,
+    pending_paths:  Mutex<HashMap<u64, String>>,
     repack_engine:  RepackEngine,
     papgt_path:     String,
     /// Dedicated thread pool for file decodes -- separate from the rayon global
     /// pool used by dir builds so decodes are never queued behind dir builds.
     /// Fixed size: avoids the 292K x pthread_create overhead of std::thread::spawn.
     decode_pool:   rayon::ThreadPool,
-    #[cfg(unix)]
     uid:           u32,
-    #[cfg(unix)]
     gid:           u32,
-    pub(crate) readonly:      bool,
+    readonly:      bool,
 }
 
 impl SharedFs {
-    pub(crate) fn new_inner(vfs: VfsManager, readonly: bool) -> Self {
-        #[cfg(unix)]
+    fn new_inner(vfs: VfsManager, readonly: bool) -> Self {
         let uid = unsafe { libc::getuid() };
-        #[cfg(unix)]
         let gid = unsafe { libc::getgid() };
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
@@ -188,9 +164,7 @@ impl SharedFs {
             .expect("failed to build decode thread pool");
         SharedFs {
             vfs,
-            #[cfg(unix)]
             path_queue:    Mutex::new(Vec::new()),
-            #[cfg(unix)]
             dir_cache:     RwLock::new(HashMap::new()),
             decode_cache:  Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CACHE_ENTRIES).unwrap())),
             cached_bytes:  AtomicUsize::new(0),
@@ -202,23 +176,18 @@ impl SharedFs {
             repack_engine,
             papgt_path,
             decode_pool,
-            #[cfg(unix)]
             uid,
-            #[cfg(unix)]
             gid,
             readonly,
         }
     }
 
-    /// Discard all pending writes without repacking (used for abort).
     pub fn discard_pending(&self) {
         std::mem::take(&mut *self.write_overlay.lock().unwrap());
         std::mem::take(&mut *self.pending_paths.lock().unwrap());
         std::mem::take(&mut *self.write_mtimes.lock().unwrap());
     }
 
-    /// Repack all pending writes to PAZ without unmounting.
-    /// Drains write_overlay and pending_paths; mount stays active.
     pub fn flush_all_pending(&self) {
         let overlay = std::mem::take(&mut *self.write_overlay.lock().unwrap());
         let paths   = std::mem::take(&mut *self.pending_paths.lock().unwrap());
@@ -238,9 +207,8 @@ impl SharedFs {
         v
     }
 
-    // -- Attr builders (Unix only — fuser::FileAttr is Linux-specific) ---------
+    // -- Attr builders ---------------------------------------------------------
 
-    #[cfg(unix)]
     fn file_attr(&self, ino: u64, size: u64) -> FileAttr {
         let mtime = self.write_mtimes.lock().unwrap()
             .get(&ino).copied()
@@ -256,7 +224,6 @@ impl SharedFs {
         }
     }
 
-    #[cfg(unix)]
     fn dir_attr(&self, ino: u64) -> FileAttr {
         FileAttr {
             ino, size: 0, blocks: 0,
@@ -269,14 +236,15 @@ impl SharedFs {
         }
     }
 
-    pub(crate) fn child_path(parent: &str, name: &str) -> String {
+    fn child_path(parent: &str, name: &OsStr) -> String {
+        let n = name.to_string_lossy();
         if parent.is_empty() {
-            name.to_string()
+            n.into_owned()
         } else {
-            let mut s = String::with_capacity(parent.len() + 1 + name.len());
+            let mut s = String::with_capacity(parent.len() + 1 + n.len());
             s.push_str(parent);
             s.push('/');
-            s.push_str(name);
+            s.push_str(&n);
             s
         }
     }
@@ -297,11 +265,11 @@ impl SharedFs {
 
     // -- Decode cache ----------------------------------------------------------
 
-    pub(crate) fn cache_get(&self, ino: u64) -> Option<Arc<[u8]>> {
+    fn cache_get(&self, ino: u64) -> Option<Arc<[u8]>> {
         self.decode_cache.lock().unwrap().get(&ino).map(Arc::clone)
     }
 
-    pub(crate) fn cache_put(&self, ino: u64, data: Arc<[u8]>) {
+    fn cache_put(&self, ino: u64, data: Arc<[u8]>) {
         let len = data.len();
         let mut cache = self.decode_cache.lock().unwrap();
         while self.cached_bytes.load(Ordering::Relaxed) + len > MAX_CACHED_BYTES {
@@ -316,7 +284,7 @@ impl SharedFs {
 
     // -- Full decode (rayon worker) ---------------------------------------------
 
-    pub(crate) fn decode(&self, ino: u64, path: &str) -> Option<Arc<[u8]>> {
+    fn decode(&self, ino: u64, path: &str) -> Option<Arc<[u8]>> {
         if let Some(d) = self.cache_get(ino) {
             return Some(d);
         }
@@ -327,7 +295,6 @@ impl SharedFs {
         };
 
         let result = slot.get_or_init(|| {
-            // Route virtual (synthesised) files to their renderer.
             if let Some(vf) = virtual_files::resolve(path) {
                 let src_ino  = ino_for(&vf.source_path);
                 let src_data = self.decode(src_ino, &vf.source_path)?;
@@ -404,14 +371,9 @@ impl SharedFs {
         }
     }
 
-    // -- Probe read (mmap slice) -- Unix only (MIME detection optimization) ----
+    // -- Probe read (mmap slice) ------------------------------------------------
 
-    #[cfg(unix)]
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
-        // For uncached DDS virtual files opened read-only: return a valid PNG
-        // header (signature + IHDR) so MIME detection sees image/png without
-        // triggering a full DDS decode.  Real dimensions are read cheaply from
-        // the DDS header via the existing mmap pool.
         if offset == 0 {
             if let Some(vf) = virtual_files::resolve(path) {
                 if matches!(vf.kind, virtual_files::VirtualKind::DdsPng)
@@ -424,19 +386,12 @@ impl SharedFs {
                 }
             }
         }
-        // Virtual files are synthesised -- no raw PAZ slice to serve.
         if virtual_files::resolve(path).is_some() { return None; }
-        // Pending writes -- serve from overlay, not stale PAZ bytes.
         if self.write_overlay.lock().unwrap().contains_key(&ino) { return None; }
-        // Serve raw PAZ bytes only for *partial* offset-0 reads (size < orig_size).
-        // This covers MIME detection on large files (Thunar reads 32KB of a 500KB file).
-        // For small files where size >= orig_size (whole-file reads), we must serve
-        // decoded content -- removing this guard breaks encrypted files (raw bytes !=
-        // decrypted content, causing incorrect checksums and garbled data).
         if offset != 0 { return None; }
         if self.cache_get(ino).is_some() { return None; }
         let entry = self.vfs.lookup(path)?;
-        if size >= entry.orig_size { return None; }  // whole-file read -- must decode
+        if size >= entry.orig_size { return None; }
         let mmap  = self.get_mmap(&entry.paz_file)?;
         let start = entry.offset as usize;
         let raw   = (size as usize).min(entry.comp_size as usize);
@@ -445,9 +400,8 @@ impl SharedFs {
         Some(mmap[start..end].to_vec())
     }
 
-    // -- Dir cache -- Unix only (DirEntry is fuser-specific) -------------------
+    // -- Dir cache -------------------------------------------------------------
 
-    #[cfg(unix)]
     fn dir_slot(&self, ino: u64) -> Arc<OnceLock<Vec<DirEntry>>> {
         if let Some(s) = self.dir_cache.read().unwrap().get(&ino) {
             return Arc::clone(s);
@@ -457,9 +411,7 @@ impl SharedFs {
         s
     }
 
-    #[cfg(unix)]
     fn build_dir_entries(&self, ino: u64, path: &str) -> Vec<DirEntry> {
-        // Virtual directory: build a filtered mirror of the real tree.
         if let Some(vdir) = virtual_files::resolve_virtual_dir(path) {
             return self.build_virtual_dir_entries(ino, path, &vdir);
         }
@@ -477,7 +429,6 @@ impl SharedFs {
             children.len() + virtual_files::virtual_root_dirs().count()
         );
 
-        // Inject virtual root directories into the VFS root listing.
         if path.is_empty() {
             for vdir_name in virtual_files::virtual_root_dirs() {
                 let vino = ino_for(vdir_name);
@@ -491,7 +442,7 @@ impl SharedFs {
         }
 
         for (name, is_dir, orig_size) in &children {
-            let child_path = Self::child_path(path, name);
+            let child_path = Self::child_path(path, OsStr::new(name));
             let child_ino  = ino_for(&child_path);
             let attr = if *is_dir {
                 self.dir_attr(child_ino)
@@ -503,8 +454,6 @@ impl SharedFs {
                                     path: child_path.into(), is_dir: *is_dir, attr_ttl: TTL });
         }
 
-        // Push the whole batch as one Vec -- O(1) pointer move under the lock.
-        // extend() would hold the lock while moving 329K items; push() does not.
         self.path_queue.lock().unwrap().push(queue_batch);
 
         let n = entries.len().saturating_sub(2);
@@ -512,11 +461,6 @@ impl SharedFs {
         entries
     }
 
-    /// Build a directory listing for a virtual directory (e.g. `.paloc.json/game/text`).
-    ///
-    /// Lists the real VFS directory that the virtual path mirrors, but only
-    /// includes subdirectories and files whose extension matches `vdir.filter_ext`.
-    #[cfg(unix)]
     fn build_virtual_dir_entries(&self, ino: u64, path: &str,
                                   vdir: &virtual_files::VirtualDirInfo) -> Vec<DirEntry> {
         let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
@@ -531,11 +475,10 @@ impl SharedFs {
         let mut queue_batch: Vec<(u64, Box<str>, bool)> = Vec::with_capacity(children.len());
 
         for (name, is_dir, orig_size) in &children {
-            let child_vpath = Self::child_path(path, name);
+            let child_vpath = Self::child_path(path, OsStr::new(name));
             let child_vino  = ino_for(&child_vpath);
 
             if *is_dir {
-                // Skip subdirectories that contain no files with the target extension.
                 let real_child = if vdir.real_path.is_empty() {
                     name.clone()
                 } else {
@@ -550,7 +493,6 @@ impl SharedFs {
                     name: name.clone(), path: child_vpath.into(), is_dir: true, attr_ttl: TTL,
                 });
             } else if name.ends_with(vdir.filter_ext) {
-                // For .pabgb files, only expose when the paired .pabgh header exists.
                 let should_add = if vdir.filter_ext == ".pabgb" {
                     name.strip_suffix(".pabgb").is_some_and(|base| {
                         let real_sibling = if vdir.real_path.is_empty() {
@@ -564,13 +506,12 @@ impl SharedFs {
                     true
                 };
                 if should_add {
-                    // Append suffix to the full source filename (e.g. "" or ".png").
                     let virt_name = if vdir.suffix.is_empty() {
                         name.clone()
                     } else {
                         format!("{name}{}", vdir.suffix)
                     };
-                    let vpath = Self::child_path(path, &virt_name);
+                    let vpath = Self::child_path(path, OsStr::new(&virt_name));
                     let vino  = ino_for(&vpath);
                     queue_batch.push((vino, vpath.clone().into(), false));
                     entries.push(DirEntry {
@@ -580,7 +521,6 @@ impl SharedFs {
                     });
                 }
             }
-            // Files that don't match the filter are silently omitted.
         }
 
         self.path_queue.lock().unwrap().push(queue_batch);
@@ -590,10 +530,7 @@ impl SharedFs {
         entries
     }
 
-    /// Build a minimal PNG header (sig + IHDR) for a DDS source file.
-    /// Reads the first 20 bytes of the DDS from the mmap to get real dimensions;
-    /// falls back to 1x1 if the entry is unavailable or the header is unreadable.
-    pub(crate) fn dds_png_stub_header(&self, dds_path: &str) -> Vec<u8> {
+    fn dds_png_stub_header(&self, dds_path: &str) -> Vec<u8> {
         let entry = match self.vfs.lookup(dds_path) {
             Some(e) => e,
             None    => return build_png_header(1, 1),
@@ -620,11 +557,9 @@ impl SharedFs {
         build_png_header(w, h)
     }
 
-    /// Synchronous repack -- called from destroy() on unmount.
-    pub(crate) fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
+    fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(&ino);
         self.write_mtimes.lock().unwrap().remove(&ino);
-        // Virtual file: convert JSONL back to binary and repack via source path.
         if let Some(vf) = virtual_files::resolve(path) {
             match vf.kind {
                 virtual_files::VirtualKind::PalocJson => {
@@ -650,8 +585,8 @@ impl SharedFs {
                     match virtual_files::parse_png_to_dds(&data, &orig_dds, &vf.source_path) {
                         Some(dds) => {
                             let src_ino = ino_for(&vf.source_path);
-                            info!("flush {path}: PNG -> {}B DDS ({:?}), repacking {}",
-                                  dds.len(), vf.source_path, vf.source_path);
+                            info!("flush {path}: PNG -> {}B DDS, repacking {}",
+                                  dds.len(), vf.source_path);
                             self.flush_ino_sync(src_ino, &vf.source_path, dds);
                         }
                         None => warn!("flush {path}: PNG->DDS conversion failed, skipping"),
@@ -678,10 +613,7 @@ impl SharedFs {
         match self.repack_engine.repack(vec![mf], &self.papgt_path, true) {
             Ok(r) if r.success => {
                 info!("repack {path}: ok");
-                // Evict stale mmap so next read re-maps the updated PAZ.
                 self.paz_maps.lock().unwrap().remove(&entry.paz_file);
-                // Reload VfsManager entry so decode-cache misses get the new
-                // offset rather than the pre-repack one.
                 if let Err(e) = self.vfs.reload_group(&group_dir) {
                     warn!("repack {path}: reload_group failed: {e}");
                 }
@@ -692,17 +624,13 @@ impl SharedFs {
     }
 }
 
-// -- CdFs -- session-thread-owned wrapper (Unix / FUSE only) -------------------
+// -- CdFs -- session-thread-owned wrapper --------------------------------------
 
-#[cfg(unix)]
 pub struct CdFs {
     shared: Arc<SharedFs>,
-    /// Private path map -- only the session thread reads/writes this.
-    /// No lock needed. Populated by draining shared.path_queue each callback.
-    paths: HashMap<u64, (Box<str>, bool)>,  // ino -> (path, is_dir)
+    paths: HashMap<u64, (Box<str>, bool)>,
 }
 
-#[cfg(unix)]
 impl CdFs {
     pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.shared) }
 
@@ -713,8 +641,6 @@ impl CdFs {
         CdFs { shared, paths }
     }
 
-    /// Drain any new inode batches that workers deposited since the last callback.
-    /// Lock is held only for mem::take (O(1)); processing happens without the lock.
     fn drain(&mut self) {
         let batches = std::mem::take(&mut *self.shared.path_queue.lock().unwrap());
         if !batches.is_empty() {
@@ -751,14 +677,8 @@ impl CdFs {
 
 // -- Filesystem impl -----------------------------------------------------------
 
-#[cfg(unix)]
 impl Filesystem for CdFs {
     fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
-        // Advertise READDIRPLUS capability so the kernel sends READDIRPLUS
-        // instead of READDIR + NxLOOKUP. Without this the kernel never calls
-        // our readdirplus() handler, causing 329K individual lookup round-trips.
-        // Requires abi-7-21. Without this flag the kernel never calls our
-        // readdirplus() handler -- it falls back to READDIR + NxLOOKUP instead.
         let _ = config.add_capabilities(fuser::consts::FUSE_DO_READDIRPLUS);
         info!("filesystem mounted (readdirplus enabled)");
         Ok(())
@@ -772,12 +692,11 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let child = SharedFs::child_path(&parent_path, &name.to_string_lossy());
+        let child = SharedFs::child_path(&parent_path, name);
 
         if let Some(entry) = self.shared.vfs.lookup(&child) {
             let ino  = self.ensure_path(&child, false);
             let attr = self.shared.file_attr(ino, entry.orig_size as u64);
-            debug!("<< lookup {child:?} -> file {}ms", _t.elapsed().as_millis());
             reply.entry(&TTL, &attr, 0);
             return;
         }
@@ -786,13 +705,9 @@ impl Filesystem for CdFs {
         {
             let ino  = self.ensure_path(&child, true);
             let attr = self.shared.dir_attr(ino);
-            debug!("<< lookup {child:?} -> dir {}ms", _t.elapsed().as_millis());
             reply.entry(&TTL, &attr, 0);
             return;
         }
-        // Virtual file inside a virtual root tree (e.g. .paloc.jsonl/game/ui.paloc).
-        // Must come before the overlay-only check: virtual files are also
-        // registered in self.paths as non-dirs (via build_virtual_dir_entries).
         if let Some(vf) = virtual_files::resolve(&child) {
             if self.shared.vfs.lookup(&vf.source_path).is_some() {
                 let ino  = self.ensure_path(&child, false);
@@ -801,64 +716,48 @@ impl Filesystem for CdFs {
                     .or_else(|| self.shared.vfs.lookup(&vf.source_path).map(|e| e.orig_size as u64))
                     .unwrap_or(0);
                 let attr = self.shared.file_attr(ino, size);
-                debug!("<< lookup {child:?} -> virtual file {}ms", _t.elapsed().as_millis());
                 reply.entry(&Duration::ZERO, &attr, 0);
                 return;
             }
         }
-        // Virtual directory (root like .paloc.json, or a mirrored subdir).
         if let Some(vdir) = virtual_files::resolve_virtual_dir(&child) {
             let real_exists = vdir.real_path.is_empty()
                 || self.shared.vfs.subtree_has_ext(&vdir.real_path, vdir.filter_ext);
             if real_exists {
                 let ino  = self.ensure_path(&child, true);
                 let attr = self.shared.dir_attr(ino);
-                debug!("<< lookup {child:?} -> virtual dir {}ms", _t.elapsed().as_millis());
                 reply.entry(&TTL, &attr, 0);
                 return;
             }
         }
-        // Overlay-only file: created via create() but not yet in VFS (e.g. temp files).
         if self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| !*d) {
             let ino  = self.ensure_path(&child, false);
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
             let attr = self.shared.file_attr(ino, size);
-            debug!("<< lookup {child:?} -> overlay file {}ms", _t.elapsed().as_millis());
             reply.entry(&Duration::ZERO, &attr, 0);
             return;
         }
-        // Negative cache: nodeid=0 + TTL tells the kernel to cache "not found"
-        // for 60s and stop re-asking. Eliminates .Trash/.sh_thumbnails spam.
-        debug!("<< lookup {child:?} -> absent (neg-cache) {}ms", _t.elapsed().as_millis());
         reply.entry(&TTL, &ABSENT_ATTR, 0);
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         debug!(">> getattr ino={ino}");
-        let _t = Instant::now();
         self.drain();
         if self.is_dir(ino) {
-            debug!("<< getattr ino={ino} -> dir {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.dir_attr(ino));
             return;
         }
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
-            None    => { debug!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis()); reply.error(ENOENT); return; }
+            None    => { reply.error(ENOENT); return; }
         };
         if let Some(e) = self.shared.vfs.lookup(&path) {
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64)
                 .unwrap_or(e.orig_size as u64);
-            debug!("<< getattr ino={ino} -> file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&TTL, &self.shared.file_attr(ino, size));
         } else if let Some(vf) = virtual_files::resolve(&path) {
-            // Virtual file check must come before overlay-only: virtual files
-            // are registered in self.paths as non-dirs by build_virtual_dir_entries.
-            // Return exact size once decoded (TTL=60s); fall back to source
-            // orig_size estimate with TTL=0 so the kernel re-queries immediately
-            // after open() finishes decoding the content.
             let (size, ttl) = match self.shared.cache_get(ino) {
                 Some(d) => (d.len() as u64, TTL),
                 None    => {
@@ -868,16 +767,12 @@ impl Filesystem for CdFs {
                     (est, Duration::ZERO)
                 }
             };
-            debug!("<< getattr ino={ino} -> virtual size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&ttl, &self.shared.file_attr(ino, size));
         } else if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
-            // Overlay-only file (created via create(), not yet in VFS).
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64).unwrap_or(0);
-            debug!("<< getattr ino={ino} -> overlay file size={size} {}ms", _t.elapsed().as_millis());
             reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, size));
         } else {
-            debug!("<< getattr ino={ino} -> ENOENT {}ms", _t.elapsed().as_millis());
             reply.error(ENOENT);
         }
     }
@@ -889,17 +784,13 @@ impl Filesystem for CdFs {
                _crtime: Option<std::time::SystemTime>, _chgtime: Option<std::time::SystemTime>,
                _bkuptime: Option<std::time::SystemTime>, _flags: Option<u32>,
                reply: ReplyAttr) {
-        debug!(">> setattr ino={ino} size={size:?}");
-        let _t = Instant::now();
         self.drain();
         if self.is_dir(ino) { reply.error(libc::EISDIR); return; }
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        // Only handle truncation; ignore all other attr changes.
         if let Some(new_size) = size {
-            // Seed overlay from current content if not already buffered.
             let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&ino);
             if needs_seed {
                 let seed = self.shared.cache_get(ino)
@@ -917,7 +808,6 @@ impl Filesystem for CdFs {
             let attr = self.shared.file_attr(ino, new_size);
             reply.attr(&Duration::ZERO, &attr);
         } else {
-            // No size change -- return current attrs unchanged.
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&ino).map(|d| d.len() as u64)
                 .or_else(|| self.shared.vfs.lookup(&path).map(|e| e.orig_size as u64))
@@ -929,7 +819,6 @@ impl Filesystem for CdFs {
     fn write(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
              data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>,
              reply: fuser::ReplyWrite) {
-        debug!(">> write ino={ino} offset={offset} len={}", data.len());
         self.drain();
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
@@ -937,22 +826,17 @@ impl Filesystem for CdFs {
         };
         if let Some(vf) = virtual_files::resolve(&path) {
             match vf.kind {
-                virtual_files::VirtualKind::PalocJson => {} // write-back supported
-                virtual_files::VirtualKind::DdsPng    => {} // write-back supported
+                virtual_files::VirtualKind::PalocJson => {}
+                virtual_files::VirtualKind::DdsPng    => {}
                 _ => { reply.error(libc::EROFS); return; }
             }
         }
-        // Allow writes to VFS-backed files and to overlay-only files (created
-        // via create() but not yet in the VFS, e.g. GIO temp files).
         let known = self.shared.vfs.lookup(&path).is_some()
             || self.paths.get(&ino).is_some_and(|(_, d)| !*d);
         if !known {
-            warn!("write ino={ino} {path:?} -> ENOENT (not in VFS or overlay)");
             reply.error(ENOENT);
             return;
         }
-
-        // Seed overlay on first write to this ino.
         let needs_seed = !self.shared.write_overlay.lock().unwrap().contains_key(&ino);
         if needs_seed {
             let seed = self.shared.cache_get(ino)
@@ -964,13 +848,10 @@ impl Filesystem for CdFs {
                 });
             self.shared.write_overlay.lock().unwrap().entry(ino).or_insert(seed);
         }
-
-        // Track for TUI display and mtime.
         self.shared.pending_paths.lock().unwrap()
             .entry(ino).or_insert_with(|| path.to_string());
         self.shared.write_mtimes.lock().unwrap()
             .insert(ino, SystemTime::now());
-
         let offset = offset as usize;
         let mut overlay = self.shared.write_overlay.lock().unwrap();
         let buf = overlay.get_mut(&ino).unwrap();
@@ -982,16 +863,13 @@ impl Filesystem for CdFs {
 
     fn create(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr,
               _mode: u32, _umask: u32, _flags: i32, reply: fuser::ReplyCreate) {
-        debug!(">> create parent={parent} name={name:?}");
         self.drain();
         let parent_path = match self.path_of(parent) {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let child = SharedFs::child_path(&parent_path, &name.to_string_lossy());
-
+        let child = SharedFs::child_path(&parent_path, name);
         let ino = self.ensure_path(&child, false);
-        // New file starts empty; caller will write full content.
         self.shared.write_overlay.lock().unwrap().entry(ino).or_insert_with(Vec::new);
         let attr = self.shared.file_attr(ino, 0);
         reply.created(&Duration::ZERO, &attr, 0, 0, fuser::consts::FOPEN_DIRECT_IO);
@@ -999,7 +877,6 @@ impl Filesystem for CdFs {
 
     fn rename(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr,
               newparent: u64, newname: &OsStr, _flags: u32, reply: fuser::ReplyEmpty) {
-        debug!(">> rename {name:?} -> {newname:?}");
         self.drain();
         let src_parent = match self.path_of(parent) {
             Some(p) => p.to_string(),
@@ -1009,39 +886,29 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let src = SharedFs::child_path(&src_parent, &name.to_string_lossy());
-        let dst = SharedFs::child_path(&dst_parent, &newname.to_string_lossy());
+        let src = SharedFs::child_path(&src_parent, name);
+        let dst = SharedFs::child_path(&dst_parent, newname);
         let src_ino = ino_for(&src);
         let dst_ino = self.ensure_path(&dst, false);
-
-        // Move overlay data from src to dst.
         let moved = self.shared.write_overlay.lock().unwrap().remove(&src_ino);
         if let Some(data) = moved {
             self.shared.cache_put(dst_ino, Arc::from(data.clone()));
             self.shared.write_overlay.lock().unwrap().insert(dst_ino, data);
         }
-        // Update pending_paths: dst path is the user-visible destination.
         self.shared.pending_paths.lock().unwrap().remove(&src_ino);
         self.shared.pending_paths.lock().unwrap()
             .entry(dst_ino).or_insert_with(|| dst.clone());
-
-        // Invalidate dir caches so ls reflects the change.
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&src_parent));
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&dst_parent));
-        debug!("<< rename {src:?} -> {dst:?} ok");
         reply.ok();
     }
 
     fn release(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, _flags: i32,
                _lock_owner: Option<u64>, _flush: bool, reply: fuser::ReplyEmpty) {
-        debug!(">> release ino={ino}");
         self.drain();
-        // Overlay stays alive until destroy() -- no repack here.
-        // Update decode cache so re-opens see current content.
         if let Some(data) = self.shared.write_overlay.lock().unwrap().get(&ino) {
             self.shared.cache_put(ino, Arc::from(data.as_slice()));
         }
-        debug!("<< release ino={ino}");
         reply.ok();
     }
 
@@ -1068,17 +935,14 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let child = SharedFs::child_path(&parent_path, &name.to_string_lossy());
-
+        let child = SharedFs::child_path(&parent_path, name);
         let ino = ino_for(&child);
 
         if virtual_files::resolve(&child).is_some() {
-            // Virtual file: exists only in-memory; just discard any overlay data.
             self.shared.write_overlay.lock().unwrap().remove(&ino);
             self.shared.write_mtimes.lock().unwrap().remove(&ino);
             self.shared.pending_paths.lock().unwrap().remove(&ino);
             self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
-            info!("unlink {child:?} (virtual, overlay discarded)");
             reply.ok();
             return;
         }
@@ -1088,58 +952,43 @@ impl Filesystem for CdFs {
             reply.error(ENOENT);
             return;
         }
-
         self.shared.vfs.remove_entry(&child);
         self.shared.decode_cache.lock().unwrap().pop(&ino);
         self.shared.write_overlay.lock().unwrap().remove(&ino);
         self.shared.write_mtimes.lock().unwrap().remove(&ino);
         self.shared.pending_paths.lock().unwrap().remove(&ino);
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
-
-        info!("unlink {child:?} (removed from VFS index; PAZ unchanged)");
         reply.ok();
     }
 
     fn readdirplus(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
                    reply: ReplyDirectoryPlus) {
-        debug!(">> readdirplus ino={ino} offset={offset}");
-        self.drain();
-        let path = match self.path_of(ino) {
-            Some(p) => p.to_string(),
-            None    => {
-                warn!("<< readdirplus ino={ino} -> ENOENT (unknown ino)");
-                reply.error(ENOENT); return;
-            }
-        };
-        let slot = self.shared.dir_slot(ino);
-        if slot.get().is_some() {
-            debug!("<< readdirplus {path:?} offset={offset} -> cache hit");
-            serve_readdirplus(slot.get().unwrap(), offset, reply);
-            return;
-        }
-        info!("readdirplus {path:?} offset={offset} -> cold, spawning build");
-        let shared = Arc::clone(&self.shared);
-        rayon::spawn(move || {
-            let t = Instant::now();
-            slot.get_or_init(|| shared.build_dir_entries(ino, &path));
-            debug!("<< readdirplus {path:?} built in {}ms, serving offset={offset}",
-                  t.elapsed().as_millis());
-            serve_readdirplus(slot.get().unwrap(), offset, reply);
-        });
-    }
-
-    fn readdir(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
-               mut reply: ReplyDirectory) {
-        debug!(">> readdir ino={ino} offset={offset}");
         self.drain();
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
         let slot = self.shared.dir_slot(ino);
-        let t = Instant::now();
+        if slot.get().is_some() {
+            serve_readdirplus(slot.get().unwrap(), offset, reply);
+            return;
+        }
+        let shared = Arc::clone(&self.shared);
+        rayon::spawn(move || {
+            slot.get_or_init(|| shared.build_dir_entries(ino, &path));
+            serve_readdirplus(slot.get().unwrap(), offset, reply);
+        });
+    }
+
+    fn readdir(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
+               mut reply: ReplyDirectory) {
+        self.drain();
+        let path = match self.path_of(ino) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        let slot = self.shared.dir_slot(ino);
         slot.get_or_init(|| self.shared.build_dir_entries(ino, &path));
-        debug!("<< readdir {path:?} built/cached in {}ms", t.elapsed().as_millis());
         let entries = slot.get().unwrap();
         for (i, e) in entries.iter().enumerate().skip(offset as usize) {
             if reply.add(e.ino, (i + 1) as i64, e.attr.kind, &e.name) { break; }
@@ -1148,52 +997,37 @@ impl Filesystem for CdFs {
     }
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
-        debug!(">> open ino={ino}");
         self.drain();
         if self.is_dir(ino) {
             reply.error(libc::EISDIR);
             return;
         }
-        // For uncached virtual files opened for writing, decode before replying
-        // so that fstat() returns the exact size immediately after open().
-        // Read-only opens skip the eager decode: probe() returns the PNG
-        // signature instantly so MIME detection doesn't trigger a full decode.
         let is_write = (_flags & libc::O_WRONLY != 0) || (_flags & libc::O_RDWR != 0);
         if is_write {
             if let Some(path) = self.path_of(ino) {
                 if virtual_files::resolve(path).is_some() && self.shared.cache_get(ino).is_none() {
                     let path   = path.to_string();
-                    info!("open {path:?} -> virtual write, decoding before reply");
                     let shared = Arc::clone(&self.shared);
                     let pool   = &shared.decode_pool as *const rayon::ThreadPool;
                     let pool   = unsafe { &*pool };
                     pool.spawn(move || {
-                        let t = Instant::now();
                         shared.decode(ino, &path);
-                        debug!("<< open {path:?} virtual decode done {}ms", t.elapsed().as_millis());
                         reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
                     });
                     return;
                 }
             }
         }
-        debug!("<< open ino={ino} -> ok");
         reply.opened(0, fuser::consts::FOPEN_DIRECT_IO);
     }
 
     fn read(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64,
             size: u32, _flags: i32, _lock: Option<u64>, reply: ReplyData) {
-        debug!(">> read ino={ino} offset={offset} size={size}");
         self.drain();
         let path = match self.path_of(ino) {
             Some(p) => p.to_string(),
-            None    => {
-                warn!("read ino={ino} offset={offset} -> ENOENT (unknown ino)");
-                reply.error(ENOENT); return;
-            }
+            None    => { reply.error(ENOENT); return; }
         };
-
-        // Serve from write overlay if there are pending (unflushed) writes.
         {
             let overlay = self.shared.write_overlay.lock().unwrap();
             if let Some(data) = overlay.get(&ino) {
@@ -1203,7 +1037,6 @@ impl Filesystem for CdFs {
                 return;
             }
         }
-
         if let Some(raw) = self.shared.probe(ino, offset, size, &path) {
             reply.data(&raw);
             return;
@@ -1214,14 +1047,8 @@ impl Filesystem for CdFs {
             reply.data(&data[s..e]);
             return;
         }
-
-        // Dedicated decode pool -- separate from rayon global pool (dir builds).
-        // Fixed thread count avoids 292Kxpthread_create overhead.
         let shared = Arc::clone(&self.shared);
-        // Borrow the pool before moving `shared` into the closure.
         let pool = &shared.decode_pool as *const rayon::ThreadPool;
-        // SAFETY: pool points into `shared` which is kept alive by the Arc clone
-        // passed into the closure; the pool outlives the closure execution.
         let pool = unsafe { &*pool };
         pool.spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1231,13 +1058,9 @@ impl Filesystem for CdFs {
                 Ok(Some(data)) => {
                     let s = (offset as usize).min(data.len());
                     let e = (s + size as usize).min(data.len());
-                    info!("read {path:?} -> decoded {}B [{s}..{e}]", data.len());
                     reply.data(&data[s..e]);
                 }
-                Ok(None) => {
-                    warn!("read {path:?} -> decode returned None");
-                    reply.error(EIO);
-                }
+                Ok(None) => { reply.error(EIO); }
                 Err(e) => {
                     let msg = e.downcast_ref::<&str>().copied()
                         .or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
@@ -1250,7 +1073,6 @@ impl Filesystem for CdFs {
     }
 }
 
-#[cfg(unix)]
 fn serve_readdirplus(entries: &[DirEntry], offset: i64, mut reply: ReplyDirectoryPlus) {
     for (i, e) in entries.iter().enumerate().skip(offset as usize) {
         if reply.add(e.ino, (i + 1) as i64, &e.name, &e.attr_ttl, &e.attr, 0) { break; }

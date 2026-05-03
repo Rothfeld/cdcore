@@ -67,8 +67,8 @@ jobs:
             artifact: cdfuse-linux-x86_64
             binary: cdfuse/target/release/cdfuse
           - os: windows-latest
-            artifact: cdfuse-windows-x86_64
-            binary: cdfuse/target/release/cdfuse.exe
+            artifact: cdwinfs-windows-x86_64
+            binary: cdwinfs/target/release/cdwinfs.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -84,8 +84,9 @@ jobs:
         shell: pwsh
         run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_ENV
 
-      - run: cargo build --release
-        working-directory: cdfuse
+      - name: Build
+        run: cargo build --release
+        working-directory: ${{ runner.os == 'Windows' && 'cdwinfs' || 'cdfuse' }}
 
       - uses: actions/upload-artifact@v4
         with:

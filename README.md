@@ -19,35 +19,39 @@ cd cdcore
 
 ---
 
-### `cdfuse`
+### `cdfuse` (Linux) / `cdwinfs` (Windows)
 
 Filesystem that mounts Crimson Desert archives as a browsable directory tree.
 Files are transparently decrypted and decompressed on access.
 Supports read-write: edit files in place or drag-and-drop replacements;
 changes are repacked into the PAZ archives through the TUI.
 
-| Platform | Driver | Requirement |
-|----------|--------|-------------|
-| Linux    | FUSE via `fuser` | `libfuse3`, `user_allow_other` in `/etc/fuse.conf` |
-| Windows  | [WinFsp](https://winfsp.dev/rel/) | WinFsp 2.x runtime installed |
+| Crate | Platform | Driver | Requirement |
+|-------|----------|--------|-------------|
+| `cdfuse` | Linux | FUSE via `fuser` | `libfuse3`, `user_allow_other` in `/etc/fuse.conf` |
+| `cdwinfs` | Windows | [WinFsp](https://winfsp.dev/rel/) | WinFsp 2.x runtime installed |
 
 **Build:**
 ```bash
-cd cdfuse
+cd cdfuse       # Linux
+cargo build --release
+
+cd cdwinfs      # Windows
 cargo build --release
 ```
 
 **Mount (interactive TUI) — Linux:**
 ```bash
-cdfuse /path/to/crimson_desert_install_dir /mnt/cd
+cdfuse /path/to/crimson_desert /mnt/cd
 ```
 
 **Mount (interactive TUI) — Windows:**
 ```
-cdfuse.exe C:\path\to\crimson_desert_install_dir Z:
+cdwinfs.exe C:\path\to\crimson_desert Z:
+cdwinfs.exe C:\path\to\crimson_desert C:\mnt\cd   # directory mount point also works
 ```
 
-Both platforms start a TUI showing pending writes:
+Both start a TUI showing pending writes:
 - `[s]` -- repack pending writes to PAZ, keep mounted
 - `[c]` -- repack and exit
 - `[q]` -- exit without saving
@@ -135,6 +139,6 @@ ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
 ## Runtime requirements
 
 - `cdcore` wheel: Python 3.10+, no other native dependencies
-- `cdfuse` Linux: `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
-- `cdfuse` Windows: [WinFsp 2.x](https://winfsp.dev/rel/) installed (the installer registers the DLL location; `cdfuse.exe` finds it automatically)
+- `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
+- `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed (the installer registers the DLL; `cdwinfs.exe` finds it automatically)
 - `ddsthumb`: none (statically linked)
