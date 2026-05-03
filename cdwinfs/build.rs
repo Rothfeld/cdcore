@@ -21,9 +21,12 @@ fn embed_windows_resources() {
     res.set("OriginalFilename", "cdwinfs.exe");
     res.set("InternalName",     "cdwinfs");
     res.set("LegalCopyright",   env!("CARGO_PKG_REPOSITORY"));
-    // Override the string FileVersion with the hash suffix; the numeric
-    // FILEVERSION (used for programmatic comparisons) stays as semver only.
+    // Explorer's "File version" row shows the numeric FILEVERSION (semver only).
+    // Explorer's "Product version" and "Comments" rows show the string table
+    // values — put the commit hash there so it's visible in file properties.
     res.set("FileVersion",      &file_version_str);
+    res.set("ProductVersion",   &file_version_str);
+    res.set("Comments",         &format!("commit {hash}"));
     res.set_manifest_file("manifest.xml");
     res.compile().expect("winres: failed to compile Windows resources");
 }
