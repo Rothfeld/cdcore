@@ -5,7 +5,9 @@ use clap::Parser;
 use log::info;
 use cdcore::VfsManager;
 
+mod config;
 mod fs;
+mod setup;
 mod tui;
 mod virtual_files;
 
@@ -16,11 +18,13 @@ struct Args {
     #[arg(long, value_name = "MOUNTPOINT", exclusive = true)]
     unmount: Option<String>,
 
-    /// Path to the Crimson Desert install directory (contains 0000/, 0001/, meta/, ...)
+    /// Path to the Crimson Desert install directory (contains 0000/, meta/, ...).
+    /// Omit to load from saved config or run the interactive setup.
     #[arg(required_unless_present = "unmount", value_name = "GAME_DIR")]
     game_dir: Option<String>,
 
-    /// Mount point
+    /// Mount point (directory path, e.g. /mnt/cd).
+    /// Omit to load from saved config or run the interactive setup.
     #[arg(required_unless_present = "unmount")]
     mount: Option<String>,
 
@@ -63,10 +67,38 @@ fn main() {
         std::process::exit(if status.success() { 0 } else { 1 });
     }
 
-    let game_dir = args.game_dir.as_deref().unwrap();
-    let mount    = args.mount.as_deref().unwrap();
+    // Resolve game_dir + mount: CLI args → saved config → interactive TUI.
+    let (game_dir, mount) = match (args.game_dir.as_deref(), args.mount.as_deref()) {
+        (Some(gd), Some(m)) => {
+            let cfg = config::Config { game_dir: gd.to_string(), mount: m.to_string() };
+            if let Err(e) = config::save(&cfg) {
+                eprintln!("warning: could not save config: {e}");
+            }
+            (gd.to_string(), m.to_string())
+        }
+        _ => {
+            let saved = config::load();
+            let game_dir_hint = saved.as_ref()
+                .map(|c| std::path::PathBuf::from(&c.game_dir))
+                .or_else(|| setup::detect_game_dir());
+            let mount_hint = saved.as_ref()
+                .map(|c| c.mount.clone())
+                .unwrap_or_else(|| setup::detect_default_mount());
 
-    let vfs = VfsManager::new(game_dir).unwrap_or_else(|e| {
+            match tui::select_paths(game_dir_hint, mount_hint) {
+                Some((gd, m)) => {
+                    let cfg = config::Config { game_dir: gd.clone(), mount: m.clone() };
+                    if let Err(e) = config::save(&cfg) {
+                        eprintln!("warning: could not save config: {e}");
+                    }
+                    (gd, m)
+                }
+                None => std::process::exit(0),
+            }
+        }
+    };
+
+    let vfs = VfsManager::new(&game_dir).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
@@ -102,11 +134,15 @@ fn main() {
         options.push(fuser::MountOption::RO);
     }
 
-    info!("mounting {} at {} ({})", game_dir, mount,
-          if args.readonly { "ro" } else { "rw" });
+    // Create the mount point directory if it doesn't exist.
+    if let Err(e) = std::fs::create_dir_all(&mount) {
+        eprintln!("warning: could not create mount point {mount}: {e}");
+    }
+
+    info!("mounting {game_dir} at {mount} ({})", if args.readonly { "ro" } else { "rw" });
 
     if std::io::stdin().is_terminal() {
-        let session = match fuser::spawn_mount2(fs, mount, &options) {
+        let session = match fuser::spawn_mount2(fs, &mount, &options) {
             Ok(s)  => s,
             Err(e) => {
                 log::error!("mount failed: {e}");
@@ -117,7 +153,7 @@ fn main() {
         let session: Arc<Mutex<Option<fuser::BackgroundSession>>> =
             Arc::new(Mutex::new(Some(session)));
 
-        match tui::run(mount, Arc::clone(&shared)) {
+        match tui::run(&mount, Arc::clone(&shared)) {
             tui::Action::Commit => {
                 drop(shared);
                 eprintln!("Repacking...");
@@ -130,7 +166,7 @@ fn main() {
             }
         }
     } else {
-        fuser::mount2(fs, mount, &options).unwrap_or_else(|e| {
+        fuser::mount2(fs, &mount, &options).unwrap_or_else(|e| {
             log::error!("mount failed: {e}");
             std::process::exit(1);
         });
