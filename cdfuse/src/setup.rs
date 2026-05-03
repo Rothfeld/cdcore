@@ -35,14 +35,12 @@ pub fn detect_game_dir() -> Option<PathBuf> {
     None
 }
 
-/// Suggest a default mount point that does not yet exist.
+/// Suggest a default mount point under /media/<user>/cd.
 pub fn detect_default_mount() -> String {
-    for candidate in ["/mnt/cd", "/tmp/cd", "/mnt/crimson-desert"] {
-        if !Path::new(candidate).exists() {
-            return candidate.to_string();
-        }
-    }
-    "/mnt/cd".to_string()
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "user".to_string());
+    format!("/media/{user}/cd")
 }
 
 fn resolve_packages(root: &Path) -> Option<PathBuf> {
