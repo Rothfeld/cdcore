@@ -1,7 +1,7 @@
 ## Crates
 
 These crates are companion tooling for the
-[CrimsonForge](https://github.com/Rothfeld/cdcore) modding studio.
+[CrimsonForge](https://github.com/hzeemr/crimsonforge) modding studio.
 The archive formats, crypto, compression, mesh parsers, FBX export logic,
 and virtual file designs are all derived directly from CrimsonForge's Python
 implementation — this project would not exist without it.
