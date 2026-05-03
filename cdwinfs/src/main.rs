@@ -63,20 +63,24 @@ fn main() {
         }
         _ => {
             // No (or partial) CLI args — try saved config first.
-            if let Some(cfg) = config::load() {
-                (cfg.game_dir, cfg.mount)
-            } else {
-                // First run: launch the setup TUI.
-                match setup::run() {
-                    Some((gd, m)) => {
-                        let cfg = config::Config { game_dir: gd.clone(), mount: m.clone() };
-                        if let Err(e) = config::save(&cfg) {
-                            eprintln!("warning: could not save config: {e}");
-                        }
-                        (gd, m)
+            let saved = config::load();
+            let game_dir_hint = saved.as_ref()
+                .map(|c| std::path::PathBuf::from(&c.game_dir))
+                .or_else(|| setup::detect_game_dir());
+            let drive_hint = saved.as_ref()
+                .map(|c| c.mount.clone())
+                .unwrap_or_else(|| setup::detect_free_drive().unwrap_or_else(|| "Y:".to_string()));
+            let drive_detected = saved.is_none();
+
+            match tui::select_paths(game_dir_hint, drive_hint, drive_detected) {
+                Some((gd, m)) => {
+                    let cfg = config::Config { game_dir: gd.clone(), mount: m.clone() };
+                    if let Err(e) = config::save(&cfg) {
+                        eprintln!("warning: could not save config: {e}");
                     }
-                    None => std::process::exit(0), // user pressed Esc
+                    (gd, m)
                 }
+                None => std::process::exit(0),
             }
         }
     };
