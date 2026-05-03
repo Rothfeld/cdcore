@@ -5,20 +5,24 @@ use clap::Parser;
 use log::info;
 use cdcore::VfsManager;
 
+mod config;
 mod fs;
+mod setup;
 mod tui;
 mod virtual_files;
 
 #[derive(Parser)]
 #[command(name = "cdwinfs", about = "Mount Crimson Desert archives as a Windows filesystem via WinFSP")]
 struct Args {
-    /// Path to the Crimson Desert install directory (contains 0000/, meta/, ...)
+    /// Path to the Crimson Desert install directory (contains 0000/, meta/, ...).
+    /// Omit to load from saved config or run the interactive setup wizard.
     #[arg(value_name = "GAME_DIR")]
-    game_dir: String,
+    game_dir: Option<String>,
 
-    /// Mount point — drive letter (X:) or empty directory path
+    /// Mount point — drive letter (X:) or empty directory path.
+    /// Omit to load from saved config or run the interactive setup wizard.
     #[arg(value_name = "MOUNT")]
-    mount: String,
+    mount: Option<String>,
 
     /// Mount read-only (no writes to PAZ archives)
     #[arg(long)]
@@ -47,11 +51,41 @@ fn main() {
         .target(env_logger::Target::Pipe(Box::new(f)))
         .init();
 
+    // Resolve game_dir + mount: CLI args → saved config → interactive setup.
+    let (game_dir, mount) = match (args.game_dir.as_deref(), args.mount.as_deref()) {
+        (Some(gd), Some(m)) => {
+            // Args provided — save them for next time, then use them.
+            let cfg = config::Config { game_dir: gd.to_string(), mount: m.to_string() };
+            if let Err(e) = config::save(&cfg) {
+                eprintln!("warning: could not save config: {e}");
+            }
+            (gd.to_string(), m.to_string())
+        }
+        _ => {
+            // No (or partial) CLI args — try saved config first.
+            if let Some(cfg) = config::load() {
+                (cfg.game_dir, cfg.mount)
+            } else {
+                // First run: launch the setup TUI.
+                match setup::run() {
+                    Some((gd, m)) => {
+                        let cfg = config::Config { game_dir: gd.clone(), mount: m.clone() };
+                        if let Err(e) = config::save(&cfg) {
+                            eprintln!("warning: could not save config: {e}");
+                        }
+                        (gd, m)
+                    }
+                    None => std::process::exit(0), // user pressed Esc
+                }
+            }
+        }
+    };
+
     // winfsp_init_or_die: tries local winfsp-x64.dll first, then falls back to
     // HKLM\SOFTWARE\WinFsp\InstallDir via the `system` feature.
     let _init = winfsp::winfsp_init_or_die();
 
-    let vfs = VfsManager::new(&args.game_dir).unwrap_or_else(|e| {
+    let vfs = VfsManager::new(&game_dir).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
@@ -97,17 +131,16 @@ fn main() {
     let mut host = winfsp::host::FileSystemHost::new(volume_params, cdfs)
         .unwrap_or_else(|e| { eprintln!("create host: {e}"); std::process::exit(1); });
 
-    host.mount(&args.mount)
-        .unwrap_or_else(|e| { eprintln!("mount {}: {e}", args.mount); std::process::exit(1); });
+    host.mount(&mount)
+        .unwrap_or_else(|e| { eprintln!("mount {mount}: {e}"); std::process::exit(1); });
 
     host.start()
         .unwrap_or_else(|e| { eprintln!("start dispatcher: {e}"); std::process::exit(1); });
 
-    info!("mounted {} at {} ({})", args.game_dir, args.mount,
-          if args.readonly { "ro" } else { "rw" });
+    info!("mounted {game_dir} at {mount} ({})", if args.readonly { "ro" } else { "rw" });
 
     if std::io::stdin().is_terminal() {
-        match tui::run(&args.mount, Arc::clone(&shared)) {
+        match tui::run(&mount, Arc::clone(&shared)) {
             tui::Action::Commit => {
                 drop(shared);
                 eprintln!("Repacking...");
