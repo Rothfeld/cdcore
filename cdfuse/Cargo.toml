@@ -8,18 +8,25 @@ license = "MIT"
 name = "cdfuse"
 
 [dependencies]
-cdcore = { path = "../cdcore" }     # VFS, parsers, crypto, compression
-fuser = { version = "0.15", features = ["abi-7-21"] }    # FUSE filesystem; abi-7-21 enables READDIRPLUS
-libc = "0.2"                                              # uid/gid, EISDIR, ENOENT constants
-clap = { version = "4", features = ["derive"] }           # CLI argument parsing
-log = "0.4"                                               # logging facade
-env_logger = "0.11"                                       # RUST_LOG env-var log backend
-lru = "0.18"                                              # LRU decode cache with per-entry eviction
-memmap2 = "0.9"                                           # memory-mapped PAZ files — zero syscalls per read
-rayon = "1"                                               # dedicated thread pool for concurrent file decodes
-ratatui = "0.29"                                          # TUI framework (re-exports crossterm)
-png       = "0.17"                                        # PNG encoder for .dds.png/ virtual view
-image_dds = "0.5"                                         # DDS re-encoder for .dds.png/ write-back
+cdcore    = { path = "../cdcore" }                         # VFS, parsers, crypto, compression
+clap      = { version = "4", features = ["derive"] }      # CLI argument parsing
+log       = "0.4"                                          # logging facade
+env_logger = "0.11"                                        # RUST_LOG env-var log backend
+lru       = "0.18"                                         # LRU decode cache with per-entry eviction
+memmap2   = "0.9"                                          # memory-mapped PAZ files — zero syscalls per read
+rayon     = "1"                                            # dedicated thread pool for concurrent file decodes
+ratatui   = "0.29"                                         # TUI framework (re-exports crossterm)
+png       = "0.17"                                         # PNG encoder for .dds.png/ virtual view
+image_dds = "0.5"                                          # DDS re-encoder for .dds.png/ write-back
+
+[target.'cfg(unix)'.dependencies]
+fuser = { version = "0.15", features = ["abi-7-21"] }     # FUSE filesystem; abi-7-21 enables READDIRPLUS
+libc  = "0.2"                                              # uid/gid, EISDIR, ENOENT constants
+
+[target.'cfg(windows)'.dependencies]
+winfsp     = "0.12"                                        # WinFsp user-mode filesystem bindings
+winfsp-sys = "0.12"                                        # FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES types used in FileSystemContext trait
+windows    = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }  # NTSTATUS codes, FILE_ATTRIBUTE_*
 
 
 [profile.release]

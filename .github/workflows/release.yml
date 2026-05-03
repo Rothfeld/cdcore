@@ -58,22 +58,39 @@ jobs:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: cdcore/dist/*.whl
 
-  # Build the cdfuse FUSE binary.  Linux-only; FUSE is not available on Windows/macOS.
+  # Build the cdfuse binary for Linux (FUSE) and Windows (WinFsp).
   cdfuse-binary:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: cdfuse-linux-x86_64
+            binary: cdfuse/target/release/cdfuse
+          - os: windows-latest
+            artifact: cdfuse-windows-x86_64
+            binary: cdfuse/target/release/cdfuse.exe
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install libfuse3 (required by the fuser crate)
+      - name: Install libfuse3 (Linux only; required by the fuser crate)
+        if: runner.os == 'Linux'
         run: sudo apt-get install -y libfuse3-dev
+
+      # clang-sys (pulled in by winfsp-sys for bindgen) needs to find libclang.
+      # LLVM is pre-installed on windows-latest but not always on PATH for clang-sys.
+      - name: Set LIBCLANG_PATH (Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_ENV
 
       - run: cargo build --release
         working-directory: cdfuse
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cdfuse-linux-x86_64
-          path: cdfuse/target/release/cdfuse
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
 
   # Collect all artifacts from the jobs above and attach them to the GitHub Release
   # created automatically when the tag was pushed.

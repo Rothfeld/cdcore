@@ -26,7 +26,6 @@
 //!   vfs          internally Arc<RwLock<BTreeMap>>, read-only after load
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -34,11 +33,17 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::ffi::OsStr;
+
+#[cfg(unix)]
 use fuser::{
     FileAttr, FileType, Filesystem, KernelConfig,
     ReplyAttr, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEntry, Request,
 };
+#[cfg(unix)]
 use libc::{ENOENT, EIO};
+
 use log::{debug, info, warn};
 use lru::LruCache;
 use memmap2::Mmap;
@@ -47,17 +52,19 @@ use cdcore::{VfsManager, crypto, compression};
 use cdcore::repack::{RepackEngine, ModifiedFile};
 use crate::virtual_files;
 
-const TTL:               Duration = Duration::from_secs(60);
 const ROOT_INO:          u64     = 1;
 const MAX_CACHE_ENTRIES: usize   = 131_072;
 const MAX_CACHED_BYTES:  usize   = 512 * 1024 * 1024;
 const SLOW_MS:           u128    = 200;  // log warning if a callback takes longer than this
+#[cfg(unix)]
+const TTL:               Duration = Duration::from_secs(60);
 
 // Returned for absent paths instead of reply.error(ENOENT).
 // nodeid=0 tells the kernel to cache the "not found" result for TTL seconds
 // (FUSE negative dentry caching), eliminating repeated lookups for the same
 // absent name (e.g. .Trash, .sh_thumbnails) that otherwise saturate the
 // session thread.
+#[cfg(unix)]
 const ABSENT_ATTR: FileAttr = FileAttr {
     ino: 0, size: 0, blocks: 0,
     atime: UNIX_EPOCH, mtime: UNIX_EPOCH, ctime: UNIX_EPOCH, crtime: UNIX_EPOCH,
@@ -65,6 +72,7 @@ const ABSENT_ATTR: FileAttr = FileAttr {
     perm: 0, nlink: 0, uid: 0, gid: 0, rdev: 0, blksize: 0, flags: 0,
 };
 
+#[cfg(unix)]
 macro_rules! timed {
     ($label:expr, $body:expr) => {{
         let _t = Instant::now();
@@ -79,7 +87,7 @@ macro_rules! timed {
 
 /// Build a 33-byte PNG stub: signature + IHDR chunk (RGBA8, no interlace).
 /// Used to answer MIME-detection reads without a full DDS decode.
-fn build_png_header(width: u32, height: u32) -> Vec<u8> {
+pub(crate) fn build_png_header(width: u32, height: u32) -> Vec<u8> {
     let mut v = Vec::with_capacity(33);
     v.extend_from_slice(b"\x89PNG\r\n\x1a\n");          // 8-byte sig
     v.extend_from_slice(&13u32.to_be_bytes());           // IHDR data length
@@ -106,19 +114,21 @@ fn png_crc32(data: &[u8]) -> u32 {
 
 // -- Inode helpers -------------------------------------------------------------
 
-fn ino_for(path: &str) -> u64 {
+pub(crate) fn ino_for(path: &str) -> u64 {
     if path.is_empty() { return ROOT_INO; }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut h);
     h.finish().wrapping_mul(0x9e3779b97f4a7c15).max(2)
 }
 
+#[cfg(unix)]
 fn parent_path(path: &str) -> &str {
     path.rsplit_once('/').map(|(p, _)| p).unwrap_or("")
 }
 
 // -- DirEntry ------------------------------------------------------------------
 
+#[cfg(unix)]
 struct DirEntry {
     ino:      u64,
     attr:     FileAttr,
@@ -131,30 +141,36 @@ struct DirEntry {
 // -- SharedFs -- state accessed by BOTH session thread and rayon workers --------
 
 pub struct SharedFs {
-    vfs:           VfsManager,
+    pub(crate) vfs:            VfsManager,
+    #[cfg(unix)]
     path_queue:    Mutex<Vec<Vec<(u64, Box<str>, bool)>>>,
+    #[cfg(unix)]
     dir_cache:     RwLock<HashMap<u64, Arc<OnceLock<Vec<DirEntry>>>>>,
-    decode_cache:  Mutex<LruCache<u64, Arc<[u8]>>>,
+    pub(crate) decode_cache:  Mutex<LruCache<u64, Arc<[u8]>>>,
     cached_bytes:  AtomicUsize,
-    in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
+    pub(crate) in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
     paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
-    write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
-    write_mtimes:   Mutex<HashMap<u64, SystemTime>>, // ino -> last write time
-    pending_paths:  Mutex<HashMap<u64, String>>,   // ino -> path for TUI display
+    pub(crate) write_overlay:  Mutex<HashMap<u64, Vec<u8>>>,
+    pub(crate) write_mtimes:   Mutex<HashMap<u64, SystemTime>>,
+    pub(crate) pending_paths:  Mutex<HashMap<u64, String>>,
     repack_engine:  RepackEngine,
     papgt_path:     String,
     /// Dedicated thread pool for file decodes -- separate from the rayon global
     /// pool used by dir builds so decodes are never queued behind dir builds.
     /// Fixed size: avoids the 292K x pthread_create overhead of std::thread::spawn.
     decode_pool:   rayon::ThreadPool,
+    #[cfg(unix)]
     uid:           u32,
+    #[cfg(unix)]
     gid:           u32,
-    readonly:      bool,
+    pub(crate) readonly:      bool,
 }
 
 impl SharedFs {
-    fn new_inner(vfs: VfsManager, readonly: bool) -> Self {
+    pub(crate) fn new_inner(vfs: VfsManager, readonly: bool) -> Self {
+        #[cfg(unix)]
         let uid = unsafe { libc::getuid() };
+        #[cfg(unix)]
         let gid = unsafe { libc::getgid() };
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
@@ -166,7 +182,9 @@ impl SharedFs {
             .expect("failed to build decode thread pool");
         SharedFs {
             vfs,
+            #[cfg(unix)]
             path_queue:    Mutex::new(Vec::new()),
+            #[cfg(unix)]
             dir_cache:     RwLock::new(HashMap::new()),
             decode_cache:  Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CACHE_ENTRIES).unwrap())),
             cached_bytes:  AtomicUsize::new(0),
@@ -178,7 +196,9 @@ impl SharedFs {
             repack_engine,
             papgt_path,
             decode_pool,
+            #[cfg(unix)]
             uid,
+            #[cfg(unix)]
             gid,
             readonly,
         }
@@ -212,8 +232,9 @@ impl SharedFs {
         v
     }
 
-    // -- Attr builders ---------------------------------------------------------
+    // -- Attr builders (Unix only — fuser::FileAttr is Linux-specific) ---------
 
+    #[cfg(unix)]
     fn file_attr(&self, ino: u64, size: u64) -> FileAttr {
         let mtime = self.write_mtimes.lock().unwrap()
             .get(&ino).copied()
@@ -229,6 +250,7 @@ impl SharedFs {
         }
     }
 
+    #[cfg(unix)]
     fn dir_attr(&self, ino: u64) -> FileAttr {
         FileAttr {
             ino, size: 0, blocks: 0,
@@ -241,16 +263,14 @@ impl SharedFs {
         }
     }
 
-    fn child_path(parent: &str, name: &OsStr) -> String {
-        let n = name.to_string_lossy();
+    pub(crate) fn child_path(parent: &str, name: &str) -> String {
         if parent.is_empty() {
-            n.into_owned()
+            name.to_string()
         } else {
-            // Avoid format! overhead (string parsing + multiple allocations).
-            let mut s = String::with_capacity(parent.len() + 1 + n.len());
+            let mut s = String::with_capacity(parent.len() + 1 + name.len());
             s.push_str(parent);
             s.push('/');
-            s.push_str(&n);
+            s.push_str(name);
             s
         }
     }
@@ -271,11 +291,11 @@ impl SharedFs {
 
     // -- Decode cache ----------------------------------------------------------
 
-    fn cache_get(&self, ino: u64) -> Option<Arc<[u8]>> {
+    pub(crate) fn cache_get(&self, ino: u64) -> Option<Arc<[u8]>> {
         self.decode_cache.lock().unwrap().get(&ino).map(Arc::clone)
     }
 
-    fn cache_put(&self, ino: u64, data: Arc<[u8]>) {
+    pub(crate) fn cache_put(&self, ino: u64, data: Arc<[u8]>) {
         let len = data.len();
         let mut cache = self.decode_cache.lock().unwrap();
         while self.cached_bytes.load(Ordering::Relaxed) + len > MAX_CACHED_BYTES {
@@ -290,7 +310,7 @@ impl SharedFs {
 
     // -- Full decode (rayon worker) ---------------------------------------------
 
-    fn decode(&self, ino: u64, path: &str) -> Option<Arc<[u8]>> {
+    pub(crate) fn decode(&self, ino: u64, path: &str) -> Option<Arc<[u8]>> {
         if let Some(d) = self.cache_get(ino) {
             return Some(d);
         }
@@ -378,8 +398,9 @@ impl SharedFs {
         }
     }
 
-    // -- Probe read (mmap slice) ------------------------------------------------
+    // -- Probe read (mmap slice) -- Unix only (MIME detection optimization) ----
 
+    #[cfg(unix)]
     fn probe(&self, ino: u64, offset: i64, size: u32, path: &str) -> Option<Vec<u8>> {
         // For uncached DDS virtual files opened read-only: return a valid PNG
         // header (signature + IHDR) so MIME detection sees image/png without
@@ -418,8 +439,9 @@ impl SharedFs {
         Some(mmap[start..end].to_vec())
     }
 
-    // -- Dir cache -------------------------------------------------------------
+    // -- Dir cache -- Unix only (DirEntry is fuser-specific) -------------------
 
+    #[cfg(unix)]
     fn dir_slot(&self, ino: u64) -> Arc<OnceLock<Vec<DirEntry>>> {
         if let Some(s) = self.dir_cache.read().unwrap().get(&ino) {
             return Arc::clone(s);
@@ -429,6 +451,7 @@ impl SharedFs {
         s
     }
 
+    #[cfg(unix)]
     fn build_dir_entries(&self, ino: u64, path: &str) -> Vec<DirEntry> {
         // Virtual directory: build a filtered mirror of the real tree.
         if let Some(vdir) = virtual_files::resolve_virtual_dir(path) {
@@ -462,7 +485,7 @@ impl SharedFs {
         }
 
         for (name, is_dir, orig_size) in &children {
-            let child_path = Self::child_path(path, OsStr::new(name));
+            let child_path = Self::child_path(path, name);
             let child_ino  = ino_for(&child_path);
             let attr = if *is_dir {
                 self.dir_attr(child_ino)
@@ -487,6 +510,7 @@ impl SharedFs {
     ///
     /// Lists the real VFS directory that the virtual path mirrors, but only
     /// includes subdirectories and files whose extension matches `vdir.filter_ext`.
+    #[cfg(unix)]
     fn build_virtual_dir_entries(&self, ino: u64, path: &str,
                                   vdir: &virtual_files::VirtualDirInfo) -> Vec<DirEntry> {
         let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
@@ -501,7 +525,7 @@ impl SharedFs {
         let mut queue_batch: Vec<(u64, Box<str>, bool)> = Vec::with_capacity(children.len());
 
         for (name, is_dir, orig_size) in &children {
-            let child_vpath = Self::child_path(path, OsStr::new(name));
+            let child_vpath = Self::child_path(path, name);
             let child_vino  = ino_for(&child_vpath);
 
             if *is_dir {
@@ -540,7 +564,7 @@ impl SharedFs {
                     } else {
                         format!("{name}{}", vdir.suffix)
                     };
-                    let vpath = Self::child_path(path, OsStr::new(&virt_name));
+                    let vpath = Self::child_path(path, &virt_name);
                     let vino  = ino_for(&vpath);
                     queue_batch.push((vino, vpath.clone().into(), false));
                     entries.push(DirEntry {
@@ -563,7 +587,7 @@ impl SharedFs {
     /// Build a minimal PNG header (sig + IHDR) for a DDS source file.
     /// Reads the first 20 bytes of the DDS from the mmap to get real dimensions;
     /// falls back to 1x1 if the entry is unavailable or the header is unreadable.
-    fn dds_png_stub_header(&self, dds_path: &str) -> Vec<u8> {
+    pub(crate) fn dds_png_stub_header(&self, dds_path: &str) -> Vec<u8> {
         let entry = match self.vfs.lookup(dds_path) {
             Some(e) => e,
             None    => return build_png_header(1, 1),
@@ -591,7 +615,7 @@ impl SharedFs {
     }
 
     /// Synchronous repack -- called from destroy() on unmount.
-    fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
+    pub(crate) fn flush_ino_sync(&self, ino: u64, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(&ino);
         self.write_mtimes.lock().unwrap().remove(&ino);
         // Virtual file: convert JSONL back to binary and repack via source path.
@@ -662,8 +686,9 @@ impl SharedFs {
     }
 }
 
-// -- CdFs -- session-thread-owned wrapper --------------------------------------
+// -- CdFs -- session-thread-owned wrapper (Unix / FUSE only) -------------------
 
+#[cfg(unix)]
 pub struct CdFs {
     shared: Arc<SharedFs>,
     /// Private path map -- only the session thread reads/writes this.
@@ -671,6 +696,7 @@ pub struct CdFs {
     paths: HashMap<u64, (Box<str>, bool)>,  // ino -> (path, is_dir)
 }
 
+#[cfg(unix)]
 impl CdFs {
     pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.shared) }
 
@@ -719,6 +745,7 @@ impl CdFs {
 
 // -- Filesystem impl -----------------------------------------------------------
 
+#[cfg(unix)]
 impl Filesystem for CdFs {
     fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
         // Advertise READDIRPLUS capability so the kernel sends READDIRPLUS
@@ -739,7 +766,7 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let child = SharedFs::child_path(&parent_path, name);
+        let child = SharedFs::child_path(&parent_path, &name.to_string_lossy());
 
         if let Some(entry) = self.shared.vfs.lookup(&child) {
             let ino  = self.ensure_path(&child, false);
@@ -955,7 +982,7 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let child = SharedFs::child_path(&parent_path, name);
+        let child = SharedFs::child_path(&parent_path, &name.to_string_lossy());
 
         let ino = self.ensure_path(&child, false);
         // New file starts empty; caller will write full content.
@@ -976,8 +1003,8 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let src = SharedFs::child_path(&src_parent, name);
-        let dst = SharedFs::child_path(&dst_parent, newname);
+        let src = SharedFs::child_path(&src_parent, &name.to_string_lossy());
+        let dst = SharedFs::child_path(&dst_parent, &newname.to_string_lossy());
         let src_ino = ino_for(&src);
         let dst_ino = self.ensure_path(&dst, false);
 
@@ -1035,7 +1062,7 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
-        let child = SharedFs::child_path(&parent_path, name);
+        let child = SharedFs::child_path(&parent_path, &name.to_string_lossy());
 
         let ino = ino_for(&child);
 
@@ -1217,6 +1244,7 @@ impl Filesystem for CdFs {
     }
 }
 
+#[cfg(unix)]
 fn serve_readdirplus(entries: &[DirEntry], offset: i64, mut reply: ReplyDirectoryPlus) {
     for (i, e) in entries.iter().enumerate().skip(offset as usize) {
         if reply.add(e.ino, (i + 1) as i64, &e.name, &e.attr_ttl, &e.attr, 0) { break; }
