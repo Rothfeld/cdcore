@@ -1,10 +1,10 @@
 ## Crates
 
-These crates are companion tooling for the
+These crates are unaffiliated companion tooling for the excellent
 [CrimsonForge](https://github.com/hzeemr/crimsonforge) modding studio.
 The archive formats, crypto, compression, mesh parsers, FBX export logic,
 and virtual file designs are all derived directly from CrimsonForge's Python
-implementation — this project would not exist without it.
+implementation.
 
 ---
 
