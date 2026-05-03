@@ -47,6 +47,8 @@ cmd "head -4 .paloc.jsonl/gamedata/$PALOC"
 head -4 ".paloc.jsonl/gamedata/$PALOC"
 sleep 2.5
 
+sleep 5
+
 # -- teardown -----------------------------------------------------------------
 kill "$CDFUSE_PID" 2>/dev/null || true
 fusermount -u "$MOUNT" 2>/dev/null || true
