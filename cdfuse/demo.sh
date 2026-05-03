@@ -1,115 +1,60 @@
 #!/usr/bin/env bash
 # Scripted cdfuse demo for asciinema.
 #
-# Record:  asciinema rec demo.cast --command 'bash crates/cdfuse/_demo.sh'
-# Convert: agg demo.cast demo.gif
-#
-# Requires:
-#   crates/cdfuse/target/release/cdfuse  (cargo build --release)
-#   /cd                                   game directory
-#   fusermount                            (apt install libfuse3)
+# Record:  asciinema rec demo.cast -c 'bash cdfuse/demo.sh'
+# Render:  agg --cols 80 --rows 24 --idle-time-limit 1.5 demo.cast cdfuse/demo.gif
 
 set -euo pipefail
 
 BINARY="$(cd "$(dirname "$0")" && pwd)/target/release/cdfuse"
-GAME_DIR="/cd"
-MOUNT="/tmp/cdfuse-demo"
+GAME="/cd"
+MOUNT="/tmp/cd"
 
-# -- helpers ------------------------------------------------------------------
+step() { printf '\n\e[2m# %s\e[0m\n' "$1"; sleep 0.8; }
+cmd()  { printf '\e[1;32m$\e[0m %s\n' "$1"; }
 
-# Print a command prompt then type the string one char at a time.
-type_cmd() {
-    printf '\e[1;32m$ \e[0m'
-    local str="$1"
-    for (( i=0; i<${#str}; i++ )); do
-        printf '%s' "${str:$i:1}"
-        sleep 0.04
-    done
-    sleep 0.25
-    echo
-}
-
-# Type and execute.
-run() {
-    type_cmd "$*"
-    "$@" 2>/dev/null || true
-    sleep 0.6
-}
-
-pause() { sleep "${1:-1.2}"; }
-
-comment() {
-    echo
-    printf '\e[2m# %s\e[0m\n' "$1"
-    sleep 0.7
-}
-
-# -- mount (invisible setup) --------------------------------------------------
-
+# -- invisible setup ----------------------------------------------------------
 mkdir -p "$MOUNT"
-"$BINARY" "$GAME_DIR" "$MOUNT" < /dev/null &
-CDFUSE_PID=$!
-
-# Wait until FUSE confirms the mount.
-for _ in $(seq 1 30); do
-    mountpoint -q "$MOUNT" 2>/dev/null && break
-    sleep 0.3
-done
+fusermount -u "$MOUNT" 2>/dev/null || true
 
 # -- demo ---------------------------------------------------------------------
+clear; sleep 0.5
 
-clear
-sleep 0.4
+step "mount the game archives"
+cmd "cdfuse /cd /tmp/cd"
+"$BINARY" "$GAME" "$MOUNT" < /dev/null &
+CDFUSE_PID=$!
+for _ in $(seq 1 20); do mountpoint -q "$MOUNT" 2>/dev/null && break; sleep 0.3; done
+sleep 0.5
 
-comment "cdfuse mounts Crimson Desert archives as a filesystem"
+cmd "cd /tmp/cd"
+cd "$MOUNT"
+sleep 1.2
 
-run ls "$MOUNT/"
-pause
+cmd "ls"
+ls
+sleep 2.5
 
-comment "Virtual directories expose binary formats without touching the archives"
+step "localisation strings as editable JSON"
+cmd "ls .paloc.jsonl/gamedata/"
+ls .paloc.jsonl/gamedata/
+sleep 1.5
 
-run ls "$MOUNT/.paloc.jsonl/gamedata/" | head -8
-pause
+PALOC=$(ls .paloc.jsonl/gamedata/ | grep eng | head -1)
+cmd "head -4 .paloc.jsonl/gamedata/$PALOC"
+head -4 ".paloc.jsonl/gamedata/$PALOC"
+sleep 2.5
 
-comment "Localisation strings as JSON lines — edit with any text editor"
+step "textures as PNG"
+cmd "ls .dds.png/ui/"
+ls .dds.png/ui/ | head -6
+sleep 2.5
 
-PALOC=$(ls "$MOUNT/.paloc.jsonl/gamedata/" 2>/dev/null | grep "eng" | head -1)
-if [ -n "$PALOC" ]; then
-    type_cmd "head -3 $MOUNT/.paloc.jsonl/gamedata/$PALOC"
-    head -3 "$MOUNT/.paloc.jsonl/gamedata/$PALOC" 2>/dev/null || true
-    sleep 0.6
-fi
-pause
-
-comment "Textures as PNG — open directly in any image editor"
-
-run ls "$MOUNT/.dds.png/ui/" | head -6
-pause
-
-comment "Meshes as FBX — drag into Blender, Maya, or Unreal"
-
-run ls "$MOUNT/.pam.fbx/object/" | head -6
-pause
-
-# Show source vs generated size to demonstrate on-demand rendering.
-PAM=$(ls "$MOUNT/object/" 2>/dev/null | grep "\.pam$" | head -1)
-if [ -n "$PAM" ]; then
-    comment "FBX is generated on access — source PAM is compressed"
-    type_cmd "ls -lh $MOUNT/object/$PAM $MOUNT/.pam.fbx/object/${PAM}.fbx"
-    ls -lh "$MOUNT/object/$PAM" "$MOUNT/.pam.fbx/object/${PAM}.fbx" 2>/dev/null || true
-    sleep 0.6
-    pause
-fi
-
-comment "Edit a file and it repacks into the PAZ archive automatically on close"
-pause 1.5
+step "meshes as FBX — open in Blender, Maya, or Unreal"
+cmd "ls .pam.fbx/object/"
+ls .pam.fbx/object/ | head -6
+sleep 2.5
 
 # -- teardown -----------------------------------------------------------------
-
 kill "$CDFUSE_PID" 2>/dev/null || true
 fusermount -u "$MOUNT" 2>/dev/null || true
-rmdir "$MOUNT" 2>/dev/null || true
-
-echo
-printf '\e[2m# github.com/Rothfeld/cdcore\e[0m\n'
-sleep 2
