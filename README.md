@@ -30,17 +30,7 @@ cd cdcore
 
 ![cdfuse demo](cdfuse/demo.gif)
 
-```mermaid
-flowchart LR
-    Disk["Game archives\nmeta/0.papgt\n0000/0000.paz\n…"]
-    VFS["cdcore VFS\ndecrypt · decompress\nlookup"]
-    FS["cdfuse / cdwinfs\nFUSE · WinFSP"]
-    VV[".paloc.jsonl\n.dds.png\n.pam.fbx\n.wem.ogg"]
-    App["Applications\nBlender · GIMP\neditor · mpv"]
-
-    Disk --> VFS --> FS --> VV --> App
-    FS --> App
-```
+![architecture](diagram.svg)
 
 Filesystem that mounts Crimson Desert archives as a browsable directory tree.
 Files are transparently decrypted and decompressed on access.

@@ -1,0 +1,73 @@
+<svg width="700" height="468" xmlns="http://www.w3.org/2000/svg"
+     font-family="ui-sans-serif,system-ui,-apple-system,sans-serif" font-size="12">
+
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="700" height="468" fill="white" rx="10" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- ── Applications ─────────────────────────────────────────────────── -->
+  <rect x="20" y="18" width="660" height="60" rx="6"
+        fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="350" y="38" text-anchor="middle" font-weight="600" font-size="13" fill="#1d4ed8">Applications</text>
+  <text x="350" y="57" text-anchor="middle" fill="#4b5563">Blender · GIMP · text editor · mpv · file manager</text>
+
+  <!-- branch: apps → two filesystem boxes -->
+  <line x1="350" y1="79" x2="350" y2="91" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="179" y1="91" x2="521" y2="91" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="179" y1="91" x2="179" y2="99"  stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="521" y1="91" x2="521" y2="99"  stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── Real tree ─────────────────────────────────────────────────────── -->
+  <rect x="20" y="102" width="318" height="112" rx="6"
+        fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="179" y="122" text-anchor="middle" font-weight="600" font-size="13" fill="#14532d">Real tree</text>
+  <text x="179" y="141" text-anchor="middle" fill="#374151">character/  gamedata/  object/</text>
+  <text x="179" y="157" text-anchor="middle" fill="#374151">ui/  sound/  texture/  …</text>
+  <text x="179" y="176" text-anchor="middle" font-size="11" fill="#6b7280">read · write · auto-repack on close</text>
+
+  <!-- ── Virtual views ─────────────────────────────────────────────────── -->
+  <rect x="362" y="102" width="318" height="112" rx="6"
+        fill="#f3e8ff" stroke="#9333ea" stroke-width="1.5"/>
+  <text x="521" y="122" text-anchor="middle" font-weight="600" font-size="13" fill="#581c87">Virtual views</text>
+  <text x="521" y="141" text-anchor="middle" fill="#374151">.paloc.jsonl/  .dds.png/</text>
+  <text x="521" y="157" text-anchor="middle" fill="#374151">.pam.fbx/  .pamlod.fbx/  .pac.fbx/</text>
+  <text x="521" y="173" text-anchor="middle" fill="#374151">.wem.ogg/</text>
+  <text x="521" y="192" text-anchor="middle" font-size="11" fill="#6b7280">read-only · on-demand conversion</text>
+
+  <!-- join: two filesystem boxes → cdfuse -->
+  <line x1="179" y1="215" x2="179" y2="227" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="521" y1="215" x2="521" y2="227" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="179" y1="227" x2="521" y2="227" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="350" y1="227" x2="350" y2="235" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── cdfuse / cdwinfs ──────────────────────────────────────────────── -->
+  <rect x="20" y="238" width="660" height="66" rx="6"
+        fill="#e0e7ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="350" y="259" text-anchor="middle" font-weight="600" font-size="13" fill="#312e81">cdfuse (Linux · FUSE)  /  cdwinfs (Windows · WinFSP)</text>
+  <text x="350" y="278" text-anchor="middle" fill="#4b5563">transparent decrypt · decompress · serve · repack writes to PAZ</text>
+  <text x="350" y="295" text-anchor="middle" font-size="11" fill="#6b7280">auto-repack on file close · TUI with pending-write log</text>
+
+  <!-- arrow -->
+  <line x1="350" y1="305" x2="350" y2="323" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── cdcore VFS ────────────────────────────────────────────────────── -->
+  <rect x="20" y="326" width="660" height="62" rx="6"
+        fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="350" y="347" text-anchor="middle" font-weight="600" font-size="13" fill="#713f12">cdcore VFS</text>
+  <text x="350" y="366" text-anchor="middle" fill="#4b5563">PAPGT index → PAMT offsets → PAZ blob lookup · LRU decode cache</text>
+  <text x="350" y="381" text-anchor="middle" font-size="11" fill="#6b7280">ChaCha20 decrypt · LZ4 decompress · CRC chain verify</text>
+
+  <!-- arrow -->
+  <line x1="350" y1="389" x2="350" y2="406" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── Disk ──────────────────────────────────────────────────────────── -->
+  <rect x="20" y="409" width="660" height="50" rx="6"
+        fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="350" y="429" text-anchor="middle" font-weight="600" font-size="13" fill="#0f172a">Game archives on disk</text>
+  <text x="350" y="448" text-anchor="middle" fill="#4b5563">meta/0.papgt · 0000/0.pamt · 0000/0000.paz · 0001/ · …</text>
+
+</svg>
