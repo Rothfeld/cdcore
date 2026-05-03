@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -101,15 +102,22 @@ fn main() {
     info!("mounted {} at {} ({})", args.game_dir, args.mount,
           if args.readonly { "ro" } else { "rw" });
 
-    match tui::run(&args.mount, Arc::clone(&shared)) {
-        tui::Action::Commit => {
-            drop(shared);
-            eprintln!("Repacking...");
+    if std::io::stdin().is_terminal() {
+        match tui::run(&args.mount, Arc::clone(&shared)) {
+            tui::Action::Commit => {
+                drop(shared);
+                eprintln!("Repacking...");
+            }
+            tui::Action::Abort => {
+                shared.discard_pending();
+                drop(shared);
+            }
         }
-        tui::Action::Abort => {
-            shared.discard_pending();
-            drop(shared);
-        }
+    } else {
+        // Non-interactive: WinFSP dispatcher runs on its own threads.
+        // Block here until the process is killed (Ctrl+C, service stop, etc.).
+        // Cleanup (unmount/stop) runs in FileSystemHost's Drop impl.
+        loop { std::thread::sleep(std::time::Duration::from_secs(60)); }
     }
 
     // Drop host: stop() + unmount() called by Drop impl.
