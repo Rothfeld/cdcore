@@ -73,6 +73,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Patch Cargo.toml versions from git tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION#.}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" cdwinfs/Cargo.toml cdfuse/Cargo.toml
+
       - name: Install libfuse3 (Linux only; required by the fuser crate)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libfuse3-dev
