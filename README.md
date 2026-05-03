@@ -136,5 +136,5 @@ ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
 
 - `cdcore` wheel: Python 3.10+, no other native dependencies
 - `cdfuse` Linux: `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
-- `cdfuse` Windows: [WinFsp 2.x](https://winfsp.dev/rel/) installed (`winfsp-x64.dll` must be loadable)
+- `cdfuse` Windows: [WinFsp 2.x](https://winfsp.dev/rel/) installed (the installer registers the DLL location; `cdfuse.exe` finds it automatically)
 - `ddsthumb`: none (statically linked)

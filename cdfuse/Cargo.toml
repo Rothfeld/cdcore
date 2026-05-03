@@ -28,6 +28,10 @@ winfsp     = "0.12"                                        # WinFsp user-mode fi
 winfsp-sys = "0.12"                                        # FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES types used in FileSystemContext trait
 windows    = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }  # NTSTATUS codes, FILE_ATTRIBUTE_*
 
+[target.'cfg(windows)'.build-dependencies]
+winfsp_build = "0.1"                                       # winfsp_link_delayload() — finds winfsp-x64.dll via registry at runtime
+
+
 
 [profile.release]
 opt-level = 3
