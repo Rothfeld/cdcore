@@ -30,7 +30,7 @@ cd cdcore
 
 ![cdfuse demo](cdfuse/demo.gif)
 
-![architecture](diagram.svg)
+![architecture](diagram.svg "boy, once i made a diagram it sure looks a lot more professional than it felt building it")
 
 Filesystem that mounts Crimson Desert archives as a browsable directory tree.
 Files are transparently decrypted and decompressed on access.
