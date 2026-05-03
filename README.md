@@ -28,6 +28,8 @@ cd cdcore
 
 ### `cdfuse` (Linux) / `cdwinfs` (Windows)
 
+![cdfuse demo](cdfuse/demo.gif)
+
 Filesystem that mounts Crimson Desert archives as a browsable directory tree.
 Files are transparently decrypted and decompressed on access.
 Supports read-write: edit files in place or drag-and-drop replacements.
