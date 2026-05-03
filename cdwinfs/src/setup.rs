@@ -35,11 +35,11 @@ pub fn detect_game_dir() -> Option<PathBuf> {
     None
 }
 
-/// Return the first unused drive letter scanning Z → D.
+/// Return the first unused drive letter scanning Z → D (single char, no colon).
 pub fn detect_free_drive() -> Option<String> {
     for c in ('D'..='Z').rev() {
         if !PathBuf::from(format!("{c}:\\")).exists() {
-            return Some(format!("{c}:"));
+            return Some(c.to_string());
         }
     }
     None

@@ -161,10 +161,15 @@ impl ConfigState {
             Some(p) => (Some(p.to_string_lossy().into_owned()), true),
             None    => (None, false),
         };
+        // Normalise: accept "Y", "Y:", "y:", etc. — store as single uppercase letter.
+        let mount = drive_hint.chars()
+            .find(|c| c.is_ascii_alphabetic())
+            .map(|c| c.to_ascii_uppercase().to_string())
+            .unwrap_or_default();
         ConfigState {
             game_dir,
             game_dir_detected,
-            mount: drive_hint,
+            mount,
             mount_detected: drive_detected,
             body: ConfigBody::Fields { editing_mount: false },
         }
@@ -172,7 +177,7 @@ impl ConfigState {
 
     fn can_mount(&self) -> bool {
         self.game_dir.as_ref().is_some_and(|s| !s.is_empty())
-            && !self.mount.is_empty()
+            && self.mount.len() == 1
     }
 }
 
@@ -268,7 +273,8 @@ fn config_loop(
             A::Quit => return None,
             A::Mount => {
                 if st.can_mount() {
-                    return Some((st.game_dir.clone().unwrap(), st.mount.clone()));
+                    // Append colon: "Y" → "Y:" as expected by WinFSP.
+                    return Some((st.game_dir.clone().unwrap(), format!("{}:", st.mount)));
                 }
             }
             A::PickerSelect(dir) => {
@@ -287,9 +293,22 @@ fn config_loop(
             A::StartEditMount => {
                 st.body = ConfigBody::Fields { editing_mount: true };
             }
-            A::MountChar(c) => { st.mount.push(c); st.mount_detected = false; }
-            A::MountPop     => { st.mount.pop();   st.mount_detected = false; }
-            A::MountDone    => {
+            A::MountChar(c) => {
+                if c.is_ascii_alphabetic() {
+                    // Single char, uppercase, auto-confirm: exit edit mode immediately.
+                    st.mount = c.to_ascii_uppercase().to_string();
+                    st.mount_detected = false;
+                    st.body = ConfigBody::Fields { editing_mount: false };
+                }
+                // Non-alpha: ignore silently.
+            }
+            A::MountPop => {
+                st.mount.clear();
+                st.mount_detected = false;
+                // Stay in edit mode so the user can type a new letter.
+            }
+            A::MountDone => {
+                // Enter/Esc exits edit mode without requiring a letter (allows cancelling).
                 st.body = ConfigBody::Fields { editing_mount: false };
             }
             A::PickerNav(_) | A::PickerUp => unreachable!(),
@@ -379,17 +398,21 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
                 _ => ("[not configured]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD), ""),
             };
 
-            let (mt_text, mt_style, mt_hint) = if st.mount.is_empty() {
-                ("[not configured]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD), "")
+            // Drive letter display: "Y:" with colon, or placeholder/prompt.
+            let drive_display;
+            let (mt_text, mt_style, mt_hint): (&str, Style, &str) = if editing_mount {
+                if st.mount.is_empty() {
+                    ("(press A-Z)", Style::default().fg(Color::Yellow), "")
+                } else {
+                    drive_display = format!("{}:", st.mount);
+                    (drive_display.as_str(), Style::default().fg(Color::Cyan), "")
+                }
+            } else if st.mount.is_empty() {
+                ("[no drive selected]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD), "")
             } else {
+                drive_display = format!("{}:", st.mount);
                 let hint = if st.mount_detected { " (auto)" } else { "" };
-                (st.mount.as_str(), Style::default().fg(Color::Cyan), hint)
-            };
-
-            let cursor = if editing_mount {
-                Span::styled("_", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::raw("")
+                (drive_display.as_str(), Style::default().fg(Color::Cyan), hint)
             };
 
             let body_lines = vec![
@@ -403,12 +426,11 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
                 ]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::raw("  Mount point:     "),
+                    Span::raw("  Drive letter:    "),
                     Span::styled(mt_text, mt_style),
-                    cursor,
                     Span::styled(mt_hint, Style::default().fg(Color::Green)),
                     Span::raw("   "),
-                    Span::styled("[m] edit", Style::default().fg(Color::DarkGray)),
+                    Span::styled("[m] change", Style::default().fg(Color::DarkGray)),
                 ]),
                 Line::from(""),
             ];
@@ -428,7 +450,7 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
                 Span::styled("[g]", Style::default().fg(Color::Cyan)),
                 Span::raw(" browse game dir   "),
                 Span::styled("[m]", Style::default().fg(Color::Cyan)),
-                Span::raw(" edit mount   "),
+                Span::raw(" drive letter   "),
                 Span::styled("Enter", enter_style),
                 Span::raw(" mount   "),
                 Span::styled("Esc", Style::default().fg(Color::Red)),
