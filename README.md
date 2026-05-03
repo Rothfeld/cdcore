@@ -31,28 +31,15 @@ cd cdcore
 ![cdfuse demo](cdfuse/demo.gif)
 
 ```mermaid
-flowchart TD
-    App["<b>Applications</b><br/>Blender · GIMP · text editor · mpv · file manager"]
+flowchart LR
+    Disk["Game archives\nmeta/0.papgt\n0000/0000.paz\n…"]
+    VFS["cdcore VFS\ndecrypt · decompress\nlookup"]
+    FS["cdfuse / cdwinfs\nFUSE · WinFSP"]
+    VV[".paloc.jsonl\n.dds.png\n.pam.fbx\n.wem.ogg"]
+    App["Applications\nBlender · GIMP\neditor · mpv"]
 
-    subgraph VV["Virtual views  (virtual_files.rs)"]
-        direction LR
-        P[".paloc.jsonl/<br/>localisation as JSONL"]
-        D[".dds.png/<br/>textures as PNG"]
-        F[".pam.fbx / .pamlod.fbx / .pac.fbx/<br/>meshes as FBX"]
-        A[".wem.ogg/<br/>audio as OGG"]
-    end
-
-    FS["<b>cdfuse</b> (Linux · FUSE)  /  <b>cdwinfs</b> (Windows · WinFSP)<br/>transparent decrypt · decompress · repack on write"]
-
-    VFS["<b>cdcore VFS</b><br/>PAPGT index → PAMT offsets → PAZ blob lookup"]
-
-    Disk["<b>Game archives on disk</b><br/>meta/0.papgt · 0000/0.pamt · 0000/0000.paz · …"]
-
-    App -->|"POSIX / Win32 filesystem calls"| VV
-    App -->|"POSIX / Win32 filesystem calls"| FS
-    VV --> FS
-    FS --> VFS
-    VFS --> Disk
+    Disk --> VFS --> FS --> VV --> App
+    FS --> App
 ```
 
 Filesystem that mounts Crimson Desert archives as a browsable directory tree.
