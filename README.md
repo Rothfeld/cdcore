@@ -2,12 +2,12 @@
 
 ### `cdcore`
 
-Rust library exposed to Python via [PyO3](https://pyo3.rs). Used as the VFS and
-decoder backend for [CrimsonForge](https://github.com/hzeemr/crimsonforge). Add
-one line at the top of `main.py` to activate:
+Rust library exposed to Python via [PyO3](https://pyo3.rs). 
+Used as an alternative VFS and decoder backend for [CrimsonForge](https://github.com/hzeemr/crimsonforge). 
+Add one line at the top of `main.py` to activate:
 
 ```python
-import cdcore  # monkeypatches core.vfs_manager and core.dds_reader
+import cdcore  # monkeypatches vfs, dds reader and mesh reader with native implementations
 ```
 
 **Build and install:**
@@ -88,20 +88,16 @@ cdwinfs.exe [GAME_DIR] [DRIVE]     # Windows — DRIVE is a single letter, e.g. 
 
 **Virtual read-only views:**
 
-Hidden root directories expose binary files as human-readable text without
-modifying the archives.
+Two hidden root directories expose binary files as human-readable text without
+modifying the archives:
 
 ```
 .paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl
-.pabgb.jsonl/gamedata/actionpointinfo.pabgb.jsonl
-.prefab.jsonl/character/cd_r0002_00_horse_hair_mane_00_0002_index05.prefab.jsonl
-.nav.jsonl/leveldata/...nav.jsonl
-.paa_metabin.jsonl/character/...paa_metabin.jsonl
 .dds.png/ui/bitmap_bell.dds.png
 ```
 
-`.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts it
-back to the original binary format and repacks it automatically.
+Both support write-back: saving a file converts it back to the original binary
+format and repacks it automatically.
 
 ```bash
 # Edit German localisation
@@ -131,6 +127,26 @@ ddsthumb /media/max/cd/ui /tmp/thumbs --size 256
 ```
 
 ---
+
+## Release artifacts
+
+Each tagged release on GitHub attaches:
+
+| File | Description |
+|------|-------------|
+| `cdcore-X.Y.Z-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | cdcore wheel — Linux x86-64 |
+| `cdcore-X.Y.Z-cp312-cp312-win_amd64.whl` | cdcore wheel — Windows x86-64 |
+| `cdfuse-linux-x86_64` | cdfuse binary — Linux |
+| `cdwinfs-windows-x86_64` | cdwinfs binary — Windows |
+
+The Linux wheel carries both the `manylinux_2_17_x86_64` (new-style, PEP 600)
+and `manylinux2014_x86_64` (old-style) platform tags.  Both refer to the same
+file; pip selects it automatically on any supported Linux distribution.
+
+Install the cdcore wheel:
+```bash
+pip install cdcore-*.whl
+```
 
 ## Build requirements
 
