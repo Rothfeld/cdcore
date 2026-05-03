@@ -1,0 +1,28 @@
+[package]
+name = "cdwinfs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "cdwinfs"
+
+[dependencies]
+cdcore    = { path = "../cdcore" }                         # VFS, parsers, crypto, compression
+clap      = { version = "4", features = ["derive"] }      # CLI argument parsing
+log       = "0.4"                                          # logging facade
+env_logger = "0.11"                                        # RUST_LOG env-var log backend
+lru       = "0.18"                                         # LRU decode cache
+memmap2   = "0.9"                                          # memory-mapped PAZ files
+winfsp    = { version = "0.12", features = ["delayload", "system"] }  # WinFSP bindings; delayload finds winfsp-x64.dll via registry at runtime
+ratatui   = "0.29"                                         # TUI framework (re-exports crossterm)
+png       = "0.17"                                         # PNG encoder for .dds.png/ virtual view
+image_dds = "0.5"                                          # DDS re-encoder for .dds.png/ write-back
+
+[build-dependencies]
+winfsp = { version = "0.12", features = ["build"] }        # emits /DELAYLOAD linker flag for winfsp-x64.dll
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
