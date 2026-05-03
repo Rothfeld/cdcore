@@ -475,7 +475,6 @@ fn draw(
     } else {
         Style::default()
     };
-    let tool_dim = Style::default().fg(Color::DarkGray);
     let header = Paragraph::new(Line::from(vec![
         Span::raw(" "),
         Span::styled("cdfuse", Style::default().add_modifier(Modifier::BOLD)),
@@ -483,12 +482,10 @@ fn draw(
         Span::styled(mount, Style::default().fg(Color::Cyan)),
         Span::styled(rw_label, rw_style),
         Span::raw("  "),
-        Span::styled("vgm:", tool_dim),
-        Span::styled(if has_vgmstream { "✓" } else { "✗" },
+        Span::styled("vgm",
             Style::default().fg(if has_vgmstream { Color::Green } else { Color::Red })),
         Span::raw(" "),
-        Span::styled("ffmpeg:", tool_dim),
-        Span::styled(if has_ffmpeg { "✓" } else { "✗" },
+        Span::styled("ffmpeg",
             Style::default().fg(if has_ffmpeg { Color::Green } else { Color::Red })),
     ]))
     .block(Block::default().borders(Borders::ALL));
