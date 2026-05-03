@@ -28,7 +28,7 @@ cd cdcore
 
 ### `cdfuse` (Linux) / `cdwinfs` (Windows)
 
-![cdfuse demo](cdfuse/demo.gif)
+![cdfuse demo](cdfuse/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?")
 
 <details>
 <summary>Architecture diagram</summary>
