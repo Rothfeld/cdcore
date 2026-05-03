@@ -20,12 +20,12 @@ struct Args {
 
     /// Path to the Crimson Desert install directory (contains 0000/, meta/, ...).
     /// Omit to load from saved config or run the interactive setup.
-    #[arg(required_unless_present = "unmount", value_name = "GAME_DIR")]
+    #[arg(value_name = "GAME_DIR")]
     game_dir: Option<String>,
 
     /// Mount point (directory path, e.g. /mnt/cd).
     /// Omit to load from saved config or run the interactive setup.
-    #[arg(required_unless_present = "unmount")]
+    #[arg(value_name = "MOUNT")]
     mount: Option<String>,
 
     /// Mount read-only (no writes to PAZ archives)
