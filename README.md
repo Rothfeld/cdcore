@@ -1,10 +1,18 @@
 ## Crates
 
+These crates are companion tooling for the
+[CrimsonForge](https://github.com/Rothfeld/cdcore) modding studio.
+The archive formats, crypto, compression, mesh parsers, FBX export logic,
+and virtual file designs are all derived directly from CrimsonForge's Python
+implementation — this project would not exist without it.
+
+---
+
 ### `cdcore`
 
-Rust library exposed to Python via [PyO3](https://pyo3.rs). 
-Used as an alternative VFS and decoder backend for [CrimsonForge](https://github.com/hzeemr/crimsonforge). 
-Add one line at the top of `main.py` to activate:
+Rust library exposed to Python via [PyO3](https://pyo3.rs).
+Used as a faster VFS and decoder backend for CrimsonForge. Add one line at
+the top of `main.py` to activate:
 
 ```python
 import cdcore  # monkeypatches vfs, dds reader and mesh reader with native implementations
@@ -88,16 +96,23 @@ cdwinfs.exe [GAME_DIR] [DRIVE]     # Windows — DRIVE is a single letter, e.g. 
 
 **Virtual read-only views:**
 
-Two hidden root directories expose binary files as human-readable text without
+Hidden root directories expose binary files in more usable formats without
 modifying the archives:
 
 ```
-.paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl
-.dds.png/ui/bitmap_bell.dds.png
+.paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl   (localisation text)
+.dds.png/ui/bitmap_bell.dds.png                            (textures as PNG)
+.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx          (static mesh)
+.pamlod.fbx/character/cd_phm_basic_body.pamlod.fbx         (LOD mesh)
+.pac.fbx/character/cd_phm_basic_body.pac.fbx               (skinned mesh)
 ```
 
-Both support write-back: saving a file converts it back to the original binary
-format and repacks it automatically.
+`.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts it
+back to the original binary format and repacks it automatically.
+
+The FBX exporter is a Rust port of CrimsonForge's `mesh_exporter.py`,
+producing binary FBX 7.4 files compatible with Blender, Maya, and Unreal.
+Geometry only for now; skeleton support is planned.
 
 ```bash
 # Edit German localisation
@@ -105,6 +120,9 @@ $EDITOR /media/max/cd/.paloc.jsonl/gamedata/localizationstring_ger.paloc.jsonl
 
 # Edit a texture (save as PNG; repacked to original DDS format automatically)
 krita /media/max/cd/.dds.png/ui/bitmap_bell.dds.png
+
+# Open a mesh in Blender
+blender /media/max/cd/.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx
 ```
 
 ---
