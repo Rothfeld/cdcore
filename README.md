@@ -23,8 +23,10 @@ cd cdcore
 
 Filesystem that mounts Crimson Desert archives as a browsable directory tree.
 Files are transparently decrypted and decompressed on access.
-Supports read-write: edit files in place or drag-and-drop replacements;
-changes are repacked into the PAZ archives through the TUI.
+Supports read-write: edit files in place or drag-and-drop replacements.
+By default, closing a modified file immediately repacks it into the PAZ archives
+in the background. Pass `--no-auto-repack` to disable this and use the TUI
+`[s]`/`[c]` keys instead.
 
 | Crate | Platform | Driver | Requirement |
 |-------|----------|--------|-------------|
@@ -48,12 +50,11 @@ cdfuse /path/to/crimson_desert /mnt/cd
 **Mount (interactive TUI) — Windows:**
 ```
 cdwinfs.exe C:\path\to\crimson_desert Z:
-cdwinfs.exe C:\path\to\crimson_desert C:\mnt\cd   # directory mount point also works
 ```
 
-Both start a TUI showing pending writes:
-- `[s]` -- repack pending writes to PAZ, keep mounted
-- `[c]` -- repack and exit
+Both start a TUI showing any pending writes (relevant with `--no-auto-repack`):
+- `[s]` -- flush pending writes to PAZ, keep mounted
+- `[c]` -- flush and exit
 - `[q]` -- exit without saving
 
 
@@ -102,8 +103,9 @@ krita /mnt/cd/.dds.png/ui/bitmap_bell.dds.png
 
 **Write via file manager:**
 
-Drag a file onto the mount to replace it. The new content is buffered
-in memory and written to the PAZ archive when you commit (`[s]` or `[c]`).
+Drag a file onto the mount to replace it. The new content is repacked
+into the PAZ archive automatically when the file is closed. With
+`--no-auto-repack`, it is buffered in memory until you press `[s]` or `[c]`.
 
 ---
 
