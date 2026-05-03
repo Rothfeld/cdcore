@@ -18,7 +18,7 @@
 //!   - dir_cache removed; each open FileCtx owns its DirBuffer.
 //!   - rayon decode_pool removed; not needed without async FUSE replies.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -120,10 +120,11 @@ pub struct SharedFs {
     write_overlay: Mutex<HashMap<String, Vec<u8>>>,
     write_mtimes:  Mutex<HashMap<String, SystemTime>>,
     pending_paths: Mutex<HashSet<String>>,
-    repack_engine: RepackEngine,
-    papgt_path:    String,
-    readonly:      bool,
-    auto_repack:   bool,
+    repack_engine:  RepackEngine,
+    papgt_path:     String,
+    readonly:       bool,
+    auto_repack:    bool,
+    recent_events:  Mutex<VecDeque<String>>,
 }
 
 impl SharedFs {
@@ -144,7 +145,20 @@ impl SharedFs {
             papgt_path,
             readonly,
             auto_repack,
+            recent_events: Mutex::new(VecDeque::new()),
         }
+    }
+
+    pub fn is_readonly(&self) -> bool { self.readonly }
+
+    pub fn push_event(&self, msg: String) {
+        let mut q = self.recent_events.lock().unwrap();
+        if q.len() >= 10 { q.pop_front(); }
+        q.push_back(msg);
+    }
+
+    pub fn recent_events(&self) -> Vec<String> {
+        self.recent_events.lock().unwrap().iter().cloned().collect()
     }
 
     pub fn discard_pending(&self) {
@@ -376,7 +390,11 @@ impl SharedFs {
                             info!("flush {path}: paloc -> {}B, repacking {}", binary.len(), vf.source_path);
                             self.flush_path_sync(&vf.source_path, binary);
                         }
-                        None => warn!("flush {path}: paloc JSONL parse failed"),
+                        None => {
+                            let msg = format!("paloc parse failed: {path}");
+                            warn!("{msg}");
+                            self.push_event(format!("[err] {msg}"));
+                        }
                     }
                 }
                 virtual_files::VirtualKind::DdsPng => {
@@ -393,7 +411,11 @@ impl SharedFs {
                             info!("flush {path}: PNG -> {}B DDS", dds.len());
                             self.flush_path_sync(&vf.source_path, dds);
                         }
-                        None => warn!("flush {path}: PNG->DDS failed"),
+                        None => {
+                            let msg = format!("PNG->DDS failed: {path}");
+                            warn!("{msg}");
+                            self.push_event(format!("[err] {msg}"));
+                        }
                     }
                 }
                 _ => warn!("flush {path}: write-back not implemented for this virtual format"),
@@ -417,13 +439,22 @@ impl SharedFs {
         match self.repack_engine.repack(vec![mf], &self.papgt_path, true) {
             Ok(r) if r.success => {
                 info!("repack {path}: ok");
+                self.push_event(format!("[ok]  repacked {path}"));
                 self.paz_maps.lock().unwrap().remove(&entry.paz_file);
                 if let Err(e) = self.vfs.reload_group(&group_dir) {
                     warn!("repack {path}: reload_group failed: {e}");
                 }
             }
-            Ok(r)  => warn!("repack {path}: errors: {:?}", r.errors),
-            Err(e) => warn!("repack {path}: failed: {e}"),
+            Ok(r) => {
+                let msg = format!("repack errors: {path}: {:?}", r.errors);
+                warn!("{msg}");
+                self.push_event(format!("[err] {msg}"));
+            }
+            Err(e) => {
+                let msg = format!("repack failed: {path}: {e}");
+                warn!("{msg}");
+                self.push_event(format!("[err] {msg}"));
+            }
         }
     }
 
