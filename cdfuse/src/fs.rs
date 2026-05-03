@@ -29,9 +29,13 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(unix)]
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+#[cfg(unix)]
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::ffi::OsStr;
@@ -44,7 +48,9 @@ use fuser::{
 #[cfg(unix)]
 use libc::{ENOENT, EIO};
 
-use log::{debug, info, warn};
+use log::{info, warn};
+#[cfg(unix)]
+use log::debug;
 use lru::LruCache;
 use memmap2::Mmap;
 

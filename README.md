@@ -20,13 +20,16 @@ cd cdcore
 ---
 
 ### `cdfuse`
-(Linux only)
-FUSE filesystem that mounts Crimson Desert archives as a Linux directory tree.
-Files are transparently decrypted and decompressed on access.
-Supports read-write: drag-and-drop files in, edit files in place, changes
-are repacked into the PAZ archives through the TUI.
 
-**Requirements:** `libfuse3`, `user_allow_other` in `/etc/fuse.conf`.
+Filesystem that mounts Crimson Desert archives as a browsable directory tree.
+Files are transparently decrypted and decompressed on access.
+Supports read-write: edit files in place or drag-and-drop replacements;
+changes are repacked into the PAZ archives through the TUI.
+
+| Platform | Driver | Requirement |
+|----------|--------|-------------|
+| Linux    | FUSE via `fuser` | `libfuse3`, `user_allow_other` in `/etc/fuse.conf` |
+| Windows  | [WinFsp](https://winfsp.dev/rel/) | WinFsp 2.x runtime installed |
 
 **Build:**
 ```bash
@@ -34,12 +37,17 @@ cd cdfuse
 cargo build --release
 ```
 
-**Mount (interactive TUI):**
+**Mount (interactive TUI) — Linux:**
 ```bash
 cdfuse /path/to/crimson_desert_install_dir /mnt/cd
 ```
 
-Starts a TUI showing pending writes.
+**Mount (interactive TUI) — Windows:**
+```
+cdfuse.exe C:\path\to\crimson_desert_install_dir Z:
+```
+
+Both platforms start a TUI showing pending writes:
 - `[s]` -- repack pending writes to PAZ, keep mounted
 - `[c]` -- repack and exit
 - `[q]` -- exit without saving
@@ -47,7 +55,7 @@ Starts a TUI showing pending writes.
 
 **Archive tree:**
 ```
-/mnt/cd/
+/mnt/cd/           (Linux)   Z:\           (Windows)
   character/
     cd_phm_basic_00_00_roofclimb_base_std_lantern_b_7_ing_00.paa
     cd_r0002_00_horse_hair_mane_00_0002_index05.prefab
@@ -69,19 +77,19 @@ modifying the archives. Each mirrors the full tree and only contains
 relevant files.
 
 ```
-/mnt/cd/.paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl
-/mnt/cd/.pabgb.jsonl/gamedata/actionpointinfo.pabgb.jsonl
-/mnt/cd/.prefab.jsonl/character/cd_r0002_00_horse_hair_mane_00_0002_index05.prefab.jsonl
-/mnt/cd/.nav.jsonl/leveldata/...nav.jsonl
-/mnt/cd/.paa_metabin.jsonl/character/...paa_metabin.jsonl
-/mnt/cd/.dds.png/ui/bitmap_bell.dds.png
+.paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl
+.pabgb.jsonl/gamedata/actionpointinfo.pabgb.jsonl
+.prefab.jsonl/character/cd_r0002_00_horse_hair_mane_00_0002_index05.prefab.jsonl
+.nav.jsonl/leveldata/...nav.jsonl
+.paa_metabin.jsonl/character/...paa_metabin.jsonl
+.dds.png/ui/bitmap_bell.dds.png
 ```
 
 `.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts
 it back to the original binary format and queues it for repack.
 
 ```bash
-# Edit German localisation
+# Edit German localisation (Linux)
 $EDITOR /mnt/cd/.paloc.jsonl/gamedata/localizationstring_ger.paloc.jsonl
 
 # Edit a texture (opens as PNG, saves back in the original DDS format on unmount)
@@ -121,10 +129,12 @@ ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
 - Rust 1.70+
 - Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`) -- pyo3 links against libpython at compile time
 - [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`) -- builds the cdcore wheel
-- `libfuse3-dev` (`apt install libfuse3-dev`) -- cdfuse links against libfuse3 at compile time
+- **Linux:** `libfuse3-dev` (`apt install libfuse3-dev`) -- cdfuse links against libfuse3 at compile time
+- **Windows:** LLVM/clang (for `winfsp-sys` bindgen) -- pre-installed on the GitHub Actions `windows-latest` runner; locally install from [llvm.org](https://releases.llvm.org/)
 
 ## Runtime requirements
 
 - `cdcore` wheel: Python 3.10+, no other native dependencies
-- `cdfuse`: `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
+- `cdfuse` Linux: `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
+- `cdfuse` Windows: [WinFsp 2.x](https://winfsp.dev/rel/) installed (`winfsp-x64.dll` must be loadable)
 - `ddsthumb`: none (statically linked)

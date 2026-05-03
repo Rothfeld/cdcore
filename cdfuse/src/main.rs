@@ -1,5 +1,7 @@
 use std::io::IsTerminal;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use clap::Parser;
 use log::info;
@@ -64,9 +66,10 @@ fn main() {
 
     // --unmount: signal the running cdfuse process to repack and exit.
     // Uses fusermount on Linux; not supported on Windows (just kill the process).
-    if let Some(ref mp) = args.unmount {
+    if args.unmount.is_some() {
         #[cfg(unix)]
         {
+            let mp = args.unmount.as_deref().unwrap();
             let status = std::process::Command::new("fusermount")
                 .args(["-u", mp])
                 .status()
@@ -165,7 +168,7 @@ fn run_unix(vfs: VfsManager, mount: &str, args: &Args) {
 
 #[cfg(windows)]
 fn run_windows(vfs: VfsManager, mount: &str, args: &Args) {
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
     use winfsp::host::{FileSystemHost, FileSystemParams, MountPoint, VolumeParams};
 
     let fs_win = fs_win::CdFsWin::new(vfs, args.readonly);
@@ -191,7 +194,11 @@ fn run_windows(vfs: VfsManager, mount: &str, args: &Args) {
             std::process::exit(1);
         });
 
-    host.mount(MountPoint::MountPoint(OsStr::new(mount)))
+    // MountPoint requires 'static; leak the drive-letter string.
+    // This is a single-mount CLI tool — the string lives for the whole process.
+    let mount_static: &'static OsStr =
+        Box::leak(OsString::from(mount).into_boxed_os_str());
+    host.mount(MountPoint::MountPoint(mount_static))
         .unwrap_or_else(|e| {
             log::error!("mount failed: {e}");
             eprintln!("mount failed: {e}");

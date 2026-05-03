@@ -26,7 +26,7 @@ use winfsp::filesystem::{
     ModificationDescriptor, OpenFileInfo, VolumeInfo, WideNameInfo,
 };
 use winfsp::filesystem::FileSystemContext;
-use winfsp::error::Result as FspResult;
+use winfsp::Result as FspResult;
 use winfsp::U16CStr;
 use winfsp_sys::{FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES};
 use windows::Win32::Foundation::{
