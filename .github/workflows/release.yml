@@ -77,40 +77,19 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libfuse3-dev
 
-      # winfsp-sys (with 'system' feature) reads HKLM\SOFTWARE\WOW6432Node\WinFsp at
-      # build time to locate headers and the import library.  The DLL itself is
-      # delay-loaded and only needed at runtime.
-      - name: Install WinFSP (Windows only)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $rel = Invoke-RestMethod https://api.github.com/repos/winfsp/winfsp/releases/latest
-          $msi = ($rel.assets | Where-Object name -like '*.msi').browser_download_url |
-                 Select-Object -First 1
-          Invoke-WebRequest $msi -OutFile winfsp.msi
-          # /qn = quiet no-UI; 3010 = success, reboot pending.
-          $p = Start-Process msiexec.exe `
-                 -ArgumentList "/i `"$(Resolve-Path winfsp.msi)`" /qn /norestart" `
-                 -Wait -PassThru
-          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { exit $p.ExitCode }
-          # winfsp-sys builds the clang include-dir argument from the registry InstallDir
-          # value, which ends with a backslash giving a mixed-separator path that clang
-          # may fail to parse.  Create a junction at C:\winfsp (no spaces) and point
-          # BINDGEN_EXTRA_CLANG_ARGS there — no quoting needed, always works.
-          cmd /c "mklink /J C:\winfsp ""C:\Program Files (x86)\WinFsp"""
-          "BINDGEN_EXTRA_CLANG_ARGS=-IC:/winfsp/inc" |
-            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      # clang-sys (pulled in by winfsp-sys for bindgen) needs libclang.  Detect the
-      # actual clang location rather than hardcoding a path that can change between
-      # runner image versions.
+      # winfsp-sys no longer uses the 'system' feature, so it uses its own bundled
+      # headers and import library at build time — no WinFSP installation needed on
+      # the runner.  The binary finds winfsp-x64.dll at runtime via a reg query in
+      # add_winfsp_bin_to_path() (main.rs).
+      #
+      # clang-sys (pulled in by winfsp-sys for bindgen) still needs libclang.
       - name: Set LIBCLANG_PATH (Windows only)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $clang = Get-Command clang -ErrorAction SilentlyContinue
           $llvm  = if ($clang) { Split-Path $clang.Source } else { 'C:\Program Files\LLVM\bin' }
-          Add-Content $env:GITHUB_ENV "LIBCLANG_PATH=$llvm"
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build
         run: cargo build --release

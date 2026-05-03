@@ -85,8 +85,11 @@ fn main() {
         }
     };
 
-    // winfsp_init_or_die: tries local winfsp-x64.dll first, then falls back to
-    // HKLM\SOFTWARE\WinFsp\InstallDir via the `system` feature.
+    // The winfsp crate no longer uses the `system` feature (which required WinFSP
+    // installed at *build* time for bindgen to find headers).  Without it,
+    // winfsp_init_or_die only tries LoadLibraryW("winfsp-x64.dll"), which fails
+    // unless the WinFSP bin dir is in PATH.  Add it from the registry ourselves.
+    add_winfsp_bin_to_path();
     let _init = winfsp::winfsp_init_or_die();
 
     let vfs = VfsManager::new(&game_dir).unwrap_or_else(|e| {
@@ -159,4 +162,31 @@ fn main() {
 
     // Drop host: stop() + unmount() called by Drop impl.
     drop(host);
+}
+
+/// Add the WinFSP bin directory to PATH so that winfsp_init_or_die can find
+/// winfsp-x64.dll via LoadLibraryW.  Reads HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir
+/// using `reg query` (no extra dependencies).  Silent no-op if not installed or
+/// if the DLL is already findable (e.g. WinFSP bin is already in PATH).
+fn add_winfsp_bin_to_path() {
+    let output = std::process::Command::new("reg")
+        .args(["query", r"HKLM\SOFTWARE\WOW6432Node\WinFsp", "/v", "InstallDir"])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return,
+    };
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some(pos) = line.find("REG_SZ") {
+            let install_dir = line[pos + "REG_SZ".len()..].trim().trim_end_matches('\\');
+            let bin = format!("{install_dir}\\bin");
+            let old_path = std::env::var("PATH").unwrap_or_default();
+            // Prepend so the WinFSP DLL takes priority over any stale copy elsewhere.
+            let _ = std::env::set_var("PATH", format!("{bin};{old_path}"));
+            return;
+        }
+    }
 }
