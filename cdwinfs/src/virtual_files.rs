@@ -46,6 +46,7 @@ static VIRTUAL_ROOTS: &[(&str, &str, &str)] = &[
     (".pam.fbx",           ".pam",         ".fbx"),
     (".pamlod.fbx",        ".pamlod",      ".fbx"),
     (".pac.fbx",           ".pac",         ".fbx"),
+    (".wem.ogg",           ".wem",         ".ogg"),
 ];
 
 // -- Public types --------------------------------------------------------------
@@ -61,6 +62,13 @@ pub enum VirtualKind {
     PamFbx,
     PamlodFbx,
     PacFbx,
+    WemOgg,
+}
+
+/// Returns true for virtual roots that require vgmstream to render.
+/// Used to suppress the directory when vgmstream is not installed.
+pub fn root_requires_vgmstream(vdir_name: &str) -> bool {
+    vdir_name.starts_with(".wem")
 }
 
 pub struct VirtualFile {
@@ -147,6 +155,7 @@ fn kind_for(ext: &str) -> VirtualKind {
         ".pam"         => VirtualKind::PamFbx,
         ".pamlod"      => VirtualKind::PamlodFbx,
         ".pac"         => VirtualKind::PacFbx,
+        ".wem"         => VirtualKind::WemOgg,
         _              => unreachable!("unknown virtual ext: {ext}"),
     }
 }
@@ -324,6 +333,42 @@ pub fn render_pac_fbx(data: &[u8], path: &str) -> Option<Vec<u8>> {
     let name = std::path::Path::new(path).file_stem()
         .and_then(|s| s.to_str()).unwrap_or(path);
     Some(submeshes_to_fbx(&refs, name))
+}
+
+// -- Audio renderer -----------------------------------------------------------
+
+/// Decode WEM (Wwise Encoded Media) to OGG Vorbis via vgmstream-cli.
+/// Writes to a temp file, shells out, reads back the result.
+pub fn render_wem_ogg(data: &[u8], path: &str, vgmstream: &std::path::Path) -> Option<Vec<u8>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CTR: AtomicU64 = AtomicU64::new(0);
+    let id  = CTR.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let wem = tmp.join(format!("cdfuse_{pid}_{id}_in.wem"));
+    let ogg = tmp.join(format!("cdfuse_{pid}_{id}_out.ogg"));
+
+    std::fs::write(&wem, data)
+        .map_err(|e| warn!("render_wem_ogg {path}: write tmp: {e}")).ok()?;
+
+    let ok = std::process::Command::new(vgmstream)
+        .args(["-o", ogg.to_str().unwrap_or(""), wem.to_str().unwrap_or("")])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let _ = std::fs::remove_file(&wem);
+
+    if !ok {
+        let _ = std::fs::remove_file(&ogg);
+        warn!("render_wem_ogg {path}: vgmstream failed");
+        return None;
+    }
+
+    let result = std::fs::read(&ogg)
+        .map_err(|e| warn!("render_wem_ogg {path}: read result: {e}")).ok();
+    let _ = std::fs::remove_file(&ogg);
+    result
 }
 
 // -- Write-back: JSONL -> binary -----------------------------------------------

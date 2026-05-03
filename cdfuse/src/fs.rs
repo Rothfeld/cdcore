@@ -78,6 +78,12 @@ fn fbx_magic_stub() -> Vec<u8> {
     v
 }
 
+/// Minimal OGG page-capture pattern for MIME sniff reads on .wem.ogg/ virtual files.
+fn ogg_magic_stub() -> &'static [u8] {
+    // OggS + stream_structure_version(0) + header_type(0x02=first page) + granule(0) + serial
+    b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"
+}
+
 // -- PNG header builder -------------------------------------------------------
 
 fn build_png_header(width: u32, height: u32) -> Vec<u8> {
@@ -151,10 +157,13 @@ pub struct SharedFs {
     readonly:      bool,
     auto_repack:   bool,
     recent_events: Mutex<VecDeque<String>>,
+    pub vgmstream: Option<std::path::PathBuf>,
+    pub ffmpeg:    Option<std::path::PathBuf>,
 }
 
 impl SharedFs {
-    fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
+    fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool,
+                vgmstream: Option<std::path::PathBuf>, ffmpeg: Option<std::path::PathBuf>) -> Self {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
         let packages_path = vfs.packages_path().to_string();
@@ -184,10 +193,14 @@ impl SharedFs {
             readonly,
             auto_repack,
             recent_events: Mutex::new(VecDeque::new()),
+            vgmstream,
+            ffmpeg,
         }
     }
 
     pub fn is_readonly(&self) -> bool { self.readonly }
+    pub fn has_vgmstream(&self) -> bool { self.vgmstream.is_some() }
+    pub fn has_ffmpeg(&self) -> bool { self.ffmpeg.is_some() }
 
     pub fn push_event(&self, msg: String) {
         let mut q = self.recent_events.lock().unwrap();
@@ -346,6 +359,10 @@ impl SharedFs {
                     virtual_files::VirtualKind::PacFbx => {
                         virtual_files::render_pac_fbx(&src_data, &vf.source_path)?
                     }
+                    virtual_files::VirtualKind::WemOgg => {
+                        let vgm = self.vgmstream.as_deref()?;
+                        virtual_files::render_wem_ogg(&src_data, &vf.source_path, vgm)?
+                    }
                 };
                 return Some(Arc::from(bytes));
             }
@@ -429,6 +446,11 @@ impl SharedFs {
                             let n   = (size as usize).min(hdr.len());
                             return Some(hdr[..n].to_vec());
                         }
+                        virtual_files::VirtualKind::WemOgg => {
+                            let hdr = ogg_magic_stub();
+                            let n   = (size as usize).min(hdr.len());
+                            return Some(hdr[..n].to_vec());
+                        }
                         _ => {}
                     }
                 }
@@ -477,6 +499,9 @@ impl SharedFs {
 
         if path.is_empty() {
             for vdir_name in virtual_files::virtual_root_dirs() {
+                if virtual_files::root_requires_vgmstream(vdir_name) && !self.vgmstream.is_some() {
+                    continue;
+                }
                 let vino = ino_for(vdir_name);
                 queue_batch.push((vino, Box::from(vdir_name), true));
                 entries.push(DirEntry {
@@ -691,8 +716,9 @@ pub struct CdFs {
 impl CdFs {
     pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.shared) }
 
-    pub fn new(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
-        let shared = Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack));
+    pub fn new(vfs: VfsManager, readonly: bool, auto_repack: bool,
+               vgmstream: Option<std::path::PathBuf>, ffmpeg: Option<std::path::PathBuf>) -> Self {
+        let shared = Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack, vgmstream, ffmpeg));
         let mut paths = HashMap::new();
         paths.insert(ROOT_INO, (Box::from(""), true));
         CdFs { shared, paths }

@@ -416,7 +416,9 @@ fn event_loop(
         let pending   = shared.pending_write_paths();
         let events    = shared.recent_events();
         let is_saving = saving.load(Ordering::Relaxed);
-        term.draw(|f| draw(f, mount, shared.is_readonly(), &pending, &events, is_saving)).ok();
+        term.draw(|f| draw(f, mount, shared.is_readonly(),
+                           shared.has_vgmstream(), shared.has_ffmpeg(),
+                           &pending, &events, is_saving)).ok();
 
         if event::poll(Duration::from_millis(250)).unwrap_or(false) {
             if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = event::read() {
@@ -447,6 +449,8 @@ fn draw(
     f: &mut ratatui::Frame,
     mount: &str,
     readonly: bool,
+    has_vgmstream: bool,
+    has_ffmpeg: bool,
     pending: &[String],
     events: &[String],
     saving: bool,
@@ -471,12 +475,21 @@ fn draw(
     } else {
         Style::default()
     };
+    let tool_dim = Style::default().fg(Color::DarkGray);
     let header = Paragraph::new(Line::from(vec![
         Span::raw(" "),
         Span::styled("cdfuse", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(mount, Style::default().fg(Color::Cyan)),
         Span::styled(rw_label, rw_style),
+        Span::raw("  "),
+        Span::styled("vgm:", tool_dim),
+        Span::styled(if has_vgmstream { "✓" } else { "✗" },
+            Style::default().fg(if has_vgmstream { Color::Green } else { Color::Red })),
+        Span::raw(" "),
+        Span::styled("ffmpeg:", tool_dim),
+        Span::styled(if has_ffmpeg { "✓" } else { "✗" },
+            Style::default().fg(if has_ffmpeg { Color::Green } else { Color::Red })),
     ]))
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(header, chunks[0]);

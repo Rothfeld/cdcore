@@ -116,7 +116,9 @@ fn main() {
         }
     }
 
-    let cdfs   = fs::CdWinFs::new(vfs, args.readonly, !args.no_auto_repack);
+    let vgmstream = setup::detect_vgmstream();
+    let ffmpeg    = setup::detect_ffmpeg();
+    let cdfs   = fs::CdWinFs::new(vfs, args.readonly, !args.no_auto_repack, vgmstream, ffmpeg);
     let shared = cdfs.shared();
 
     let mut volume_params = winfsp::host::VolumeParams::new();
