@@ -47,11 +47,6 @@ cmd "head -4 .paloc.jsonl/gamedata/$PALOC"
 head -4 ".paloc.jsonl/gamedata/$PALOC"
 sleep 2.5
 
-step "meshes as FBX — open in Blender, Maya, or Unreal"
-cmd "ls .pam.fbx/object/"
-ls .pam.fbx/object/ | head -6
-sleep 2.5
-
 # -- teardown -----------------------------------------------------------------
 kill "$CDFUSE_PID" 2>/dev/null || true
 fusermount -u "$MOUNT" 2>/dev/null || true
