@@ -20,7 +20,8 @@ png       = "0.17"                                         # PNG encoder for .dd
 image_dds = "0.5"                                          # DDS re-encoder for .dds.png/ write-back
 
 [build-dependencies]
-winfsp = { version = "0.12", features = ["build"] }        # emits /DELAYLOAD linker flag for winfsp-x64.dll
+winfsp  = { version = "0.12", features = ["build"] }       # emits /DELAYLOAD linker flag for winfsp-x64.dll
+winres  = "0.1"                                             # embeds VERSIONINFO resource and application manifest
 
 [profile.release]
 opt-level = 3
