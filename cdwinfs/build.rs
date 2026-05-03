@@ -20,6 +20,7 @@ fn embed_windows_resources() {
     res.set("ProductName",      "cdwinfs");
     res.set("OriginalFilename", "cdwinfs.exe");
     res.set("InternalName",     "cdwinfs");
+    res.set("LegalCopyright",   env!("CARGO_PKG_REPOSITORY"));
     // Override the string FileVersion with the hash suffix; the numeric
     // FILEVERSION (used for programmatic comparisons) stays as semver only.
     res.set("FileVersion",      &file_version_str);
