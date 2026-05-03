@@ -77,6 +77,20 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libfuse3-dev
 
+      # winfsp-sys uses the 'system' feature which reads HKLM\SOFTWARE\WOW6432Node\WinFsp
+      # at build time to locate headers and the import library.  Install WinFSP before
+      # the build so that registry key exists.  The DLL itself is delay-loaded at
+      # runtime; it does not need to be present during compilation.
+      - name: Install WinFSP (Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $rel = Invoke-RestMethod https://api.github.com/repos/winfsp/winfsp/releases/latest
+          $msi = ($rel.assets | Where-Object name -like '*.msi').browser_download_url |
+                 Select-Object -First 1
+          Invoke-WebRequest $msi -OutFile winfsp.msi
+          Start-Process msiexec -ArgumentList '/i winfsp.msi /quiet /norestart' -Wait
+
       # clang-sys (pulled in by winfsp-sys for bindgen) needs to find libclang.
       # LLVM is pre-installed on windows-latest but not always on PATH for clang-sys.
       - name: Set LIBCLANG_PATH (Windows only)
