@@ -47,16 +47,12 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let log_to_tui = args.unmount.is_none() && std::io::stdin().is_terminal();
-    if log_to_tui {
-        let f = std::fs::File::create("/tmp/cdfuse.log")
-            .expect("cannot open /tmp/cdfuse.log");
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .target(env_logger::Target::Pipe(Box::new(f)))
-            .init();
-    } else {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    }
+    // Always log to /tmp/cdfuse.log — keeps both the TUI and daemon mode clean.
+    let f = std::fs::File::create("/tmp/cdfuse.log")
+        .expect("cannot open /tmp/cdfuse.log");
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .target(env_logger::Target::Pipe(Box::new(f)))
+        .init();
 
     if args.unmount.is_some() {
         let mp = args.unmount.as_deref().unwrap();

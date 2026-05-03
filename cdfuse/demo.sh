@@ -14,8 +14,10 @@ step() { printf '\n\e[2m# %s\e[0m\n' "$1"; sleep 0.8; }
 cmd()  { printf '\e[1;32m$\e[0m %s\n' "$1"; }
 
 # -- invisible setup ----------------------------------------------------------
-mkdir -p "$MOUNT"
 fusermount -u "$MOUNT" 2>/dev/null || true
+sleep 0.3
+rm -rf "$MOUNT"
+mkdir -p "$MOUNT"
 
 # -- demo ---------------------------------------------------------------------
 clear; sleep 0.5
