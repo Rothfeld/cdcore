@@ -398,21 +398,33 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
                 _ => ("[not configured]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD), ""),
             };
 
-            // Drive letter display: "Y:" with colon, or placeholder/prompt.
+            // Drive letter display.
             let drive_display;
-            let (mt_text, mt_style, mt_hint): (&str, Style, &str) = if editing_mount {
-                if st.mount.is_empty() {
-                    ("(press A-Z)", Style::default().fg(Color::Yellow), "")
+            let (dl_prefix, mt_text, mt_style, mt_suffix): (&str, &str, Style, &str) =
+                if editing_mount {
+                    // Reversed highlight + explicit cursor makes the active field unmissable.
+                    let style = Style::default()
+                        .fg(Color::Black).bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD);
+                    if st.mount.is_empty() {
+                        ("\u{25b6} ", " A-Z ", style, "")
+                    } else {
+                        drive_display = format!(" {}:_ ", st.mount);
+                        ("\u{25b6} ", drive_display.as_str(), style, "")
+                    }
+                } else if st.mount.is_empty() {
+                    ("  ", "[no drive selected]",
+                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD), "")
                 } else {
                     drive_display = format!("{}:", st.mount);
-                    (drive_display.as_str(), Style::default().fg(Color::Cyan), "")
-                }
-            } else if st.mount.is_empty() {
-                ("[no drive selected]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD), "")
+                    let hint = if st.mount_detected { " (auto)" } else { "" };
+                    ("  ", drive_display.as_str(), Style::default().fg(Color::Cyan), hint)
+                };
+
+            let body_title = if editing_mount {
+                " Configuration — type A-Z "
             } else {
-                drive_display = format!("{}:", st.mount);
-                let hint = if st.mount_detected { " (auto)" } else { "" };
-                (drive_display.as_str(), Style::default().fg(Color::Cyan), hint)
+                " Configuration "
             };
 
             let body_lines = vec![
@@ -426,9 +438,10 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
                 ]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::raw("  Drive letter:    "),
+                    Span::raw(dl_prefix),
+                    Span::raw("Drive letter:    "),
                     Span::styled(mt_text, mt_style),
-                    Span::styled(mt_hint, Style::default().fg(Color::Green)),
+                    Span::styled(mt_suffix, Style::default().fg(Color::Green)),
                     Span::raw("   "),
                     Span::styled("[m] change", Style::default().fg(Color::DarkGray)),
                 ]),
@@ -436,7 +449,7 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
             ];
 
             let body = Paragraph::new(body_lines)
-                .block(Block::default().borders(Borders::ALL).title(" Configuration "));
+                .block(Block::default().borders(Borders::ALL).title(body_title));
             f.render_widget(body, chunks[1]);
 
             // Footer
