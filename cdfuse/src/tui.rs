@@ -53,9 +53,6 @@ fn event_loop(
         if event::poll(Duration::from_millis(250)).unwrap_or(false) {
             if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = event::read() {
                 match (code, modifiers) {
-                    (KeyCode::Char('c'), KeyModifiers::NONE)
-                    | (KeyCode::Char('C'), KeyModifiers::NONE) => return Action::Commit,
-
                     (KeyCode::Char('s'), _) | (KeyCode::Char('S'), _)
                         if !is_saving && !pending.is_empty() =>
                     {
@@ -168,12 +165,6 @@ fn draw(
         Span::raw("  "),
         Span::styled("[s]", s_style),
         Span::raw(" save    "),
-        Span::styled("[c]", if (pending.is_empty() && !saving) || readonly {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-        }),
-        Span::raw(" commit and exit    "),
         Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Span::raw(" quit without saving"),
     ];
