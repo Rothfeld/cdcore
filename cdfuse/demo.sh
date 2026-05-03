@@ -33,8 +33,8 @@ cmd "cd /tmp/cd"
 cd "$MOUNT"
 sleep 1.2
 
-cmd "ls"
-ls
+cmd "ls -a"
+ls -a
 sleep 2.5
 
 step "localisation strings as editable JSON"
