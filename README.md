@@ -10,7 +10,6 @@ one line at the top of `main.py` to activate:
 import cdcore  # monkeypatches core.vfs_manager and core.dds_reader
 ```
 
-
 **Build and install:**
 ```bash
 cd cdcore
@@ -25,13 +24,13 @@ Filesystem that mounts Crimson Desert archives as a browsable directory tree.
 Files are transparently decrypted and decompressed on access.
 Supports read-write: edit files in place or drag-and-drop replacements.
 By default, closing a modified file immediately repacks it into the PAZ archives
-in the background. Pass `--no-auto-repack` to disable this and use the TUI
-`[s]`/`[c]` keys instead.
+in the background. Pass `--no-auto-repack` to disable this and use `[s]` to
+flush manually instead.
 
 | Crate | Platform | Driver | Requirement |
 |-------|----------|--------|-------------|
 | `cdfuse` | Linux | FUSE via `fuser` | `libfuse3`, `user_allow_other` in `/etc/fuse.conf` |
-| `cdwinfs` | Windows | [WinFsp](https://winfsp.dev/rel/) | WinFsp 2.x runtime installed |
+| `cdwinfs` | Windows | [WinFsp](https://winfsp.dev/rel/) | WinFsp 2.x installed |
 
 **Build:**
 ```bash
@@ -42,44 +41,55 @@ cd cdwinfs      # Windows
 cargo build --release
 ```
 
-**Mount (interactive TUI) — Linux:**
+**First launch — interactive setup:**
+
+Both tools save their configuration (`~/.config/cdfuse/cdfuse.cfg` on Linux,
+`%APPDATA%\CrimsonForge\cdwinfs.cfg` on Windows) so they can be launched without
+arguments on subsequent runs.
+
+On first launch (no saved config, no CLI args) a configuration screen appears:
+
+```
+  Game directory:  /cd              (detected)    [g] browse
+  Mount point:     /media/max/cd                  [m] edit
+```
+
+The game directory is detected automatically from the registry (Windows) or common
+install paths. Missing fields are shown in red. Press `Enter` to mount once both
+are filled.
+
+**CLI usage:**
 ```bash
-cdfuse /path/to/crimson_desert /mnt/cd
+cdfuse [GAME_DIR] [MOUNT]          # Linux — args override saved config
+cdwinfs.exe [GAME_DIR] [DRIVE]     # Windows — DRIVE is a single letter, e.g. Y
 ```
 
-**Mount (interactive TUI) — Windows:**
+**TUI while mounted:**
 ```
-cdwinfs.exe C:\path\to\crimson_desert Z:
+  [s] flush pending writes to PAZ    Esc quit [without saving]
 ```
-
-Both start a TUI showing any pending writes (relevant with `--no-auto-repack`):
-- `[s]` -- flush pending writes to PAZ, keep mounted
-- `[c]` -- flush and exit
-- `[q]` -- exit without saving
-
+- `(ro)` shown in yellow if mounted read-only
+- Events panel appears below when repacks complete or fail
 
 **Archive tree:**
 ```
-/mnt/cd/           (Linux)   Z:\           (Windows)
+/media/max/cd/     (Linux)    Y:\    (Windows)
   character/
     cd_phm_basic_00_00_roofclimb_base_std_lantern_b_7_ing_00.paa
     cd_r0002_00_horse_hair_mane_00_0002_index05.prefab
   gamedata/
     localizationstring_eng.paloc
     actionpointinfo.pabgb
-    actionpointinfo.pabgh
   object/
     cd_gimmick_statue_09_ball.pam
   ui/
     bitmap_bell.dds
-  ...
 ```
 
-**Virtual read-only views (non-binary formats):**
+**Virtual read-only views:**
 
 Hidden root directories expose binary files as human-readable text without
-modifying the archives. Each mirrors the full tree and only contains
-relevant files.
+modifying the archives.
 
 ```
 .paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl
@@ -90,22 +100,16 @@ relevant files.
 .dds.png/ui/bitmap_bell.dds.png
 ```
 
-`.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts
-it back to the original binary format and queues it for repack.
+`.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts it
+back to the original binary format and repacks it automatically.
 
 ```bash
-# Edit German localisation (Linux)
-$EDITOR /mnt/cd/.paloc.jsonl/gamedata/localizationstring_ger.paloc.jsonl
+# Edit German localisation
+$EDITOR /media/max/cd/.paloc.jsonl/gamedata/localizationstring_ger.paloc.jsonl
 
-# Edit a texture (opens as PNG, saves back in the original DDS format on unmount)
-krita /mnt/cd/.dds.png/ui/bitmap_bell.dds.png
+# Edit a texture (save as PNG; repacked to original DDS format automatically)
+krita /media/max/cd/.dds.png/ui/bitmap_bell.dds.png
 ```
-
-**Write via file manager:**
-
-Drag a file onto the mount to replace it. The new content is repacked
-into the PAZ archive automatically when the file is closed. With
-`--no-auto-repack`, it is buffered in memory until you press `[s]` or `[c]`.
 
 ---
 
@@ -121,26 +125,24 @@ by `cdcore`: BC1-BC7, BC6H, RGBA, float variants.
 ddsthumb ui/bitmap_bell.dds /tmp/thumbs --size 128
 
 # Entire tree
-ddsthumb /mnt/cd/ui /tmp/thumbs --size 256
+ddsthumb /media/max/cd/ui /tmp/thumbs --size 256
 # Found 18355 DDS files -- generating 256px thumbnails ...
 #   1000/18355  errors=0
-#   ...
 ```
-
 
 ---
 
 ## Build requirements
 
 - Rust 1.70+
-- Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`) -- pyo3 links against libpython at compile time
-- [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`) -- builds the cdcore wheel
-- **Linux:** `libfuse3-dev` (`apt install libfuse3-dev`) -- cdfuse links against libfuse3 at compile time
-- **Windows:** LLVM/clang (for `winfsp-sys` bindgen) -- pre-installed on the GitHub Actions `windows-latest` runner; locally install from [llvm.org](https://releases.llvm.org/)
+- Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`) — pyo3 links against libpython at compile time
+- [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`) — builds the cdcore wheel
+- **Linux:** `libfuse3-dev` (`apt install libfuse3-dev`) — cdfuse links against libfuse3 at compile time
+- **Windows:** LLVM/clang for `winfsp-sys` bindgen — pre-installed on `windows-latest` CI runners; locally install from [llvm.org](https://releases.llvm.org/)
 
 ## Runtime requirements
 
 - `cdcore` wheel: Python 3.10+, no other native dependencies
 - `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
-- `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed (the installer registers the DLL; `cdwinfs.exe` finds it automatically)
+- `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed — the installer registers the DLL path; `cdwinfs.exe` finds it automatically
 - `ddsthumb`: none (statically linked)
