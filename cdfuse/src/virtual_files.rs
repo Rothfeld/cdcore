@@ -37,10 +37,10 @@ use cdcore::formats::physics::parse_nav;
 /// file managers pick the right MIME type without ambiguity.
 static VIRTUAL_ROOTS: &[(&str, &str, &str)] = &[
     (".paloc.jsonl",       ".paloc",       ".jsonl"),
-    (".pabgb.jsonl",       ".pabgb",       ".jsonl"),
-    (".prefab.jsonl",      ".prefab",      ".jsonl"),
-    (".paa_metabin.jsonl", ".paa_metabin", ".jsonl"),
-    (".nav.jsonl",         ".nav",         ".jsonl"),
+    // (".pabgb.jsonl",       ".pabgb",       ".jsonl"),     // disabled
+    // (".prefab.jsonl",      ".prefab",      ".jsonl"),     // disabled
+    // (".paa_metabin.jsonl", ".paa_metabin", ".jsonl"),     // disabled
+    // (".nav.jsonl",         ".nav",         ".jsonl"),     // disabled
     (".dds.png",           ".dds",         ".png"),
 ];
 
