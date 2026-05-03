@@ -325,6 +325,15 @@ impl SharedFs {
                     virtual_files::VirtualKind::DdsPng => {
                         virtual_files::render_dds_png(&src_data, &vf.source_path)?
                     }
+                    virtual_files::VirtualKind::PamFbx => {
+                        virtual_files::render_pam_fbx(&src_data, &vf.source_path)?
+                    }
+                    virtual_files::VirtualKind::PamlodFbx => {
+                        virtual_files::render_pamlod_fbx(&src_data, &vf.source_path)?
+                    }
+                    virtual_files::VirtualKind::PacFbx => {
+                        virtual_files::render_pac_fbx(&src_data, &vf.source_path)?
+                    }
                 };
                 return Some(Arc::from(bytes));
             }

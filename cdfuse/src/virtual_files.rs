@@ -26,6 +26,7 @@ use cdcore::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabg
 use cdcore::formats::scene::parse_prefab;
 use cdcore::formats::animation::parse_paa_metabin;
 use cdcore::formats::physics::parse_nav;
+use cdcore::formats::mesh::{parse_pam, parse_pamlod, parse_pac, submeshes_to_fbx};
 
 // -- Constants -----------------------------------------------------------------
 
@@ -42,6 +43,9 @@ static VIRTUAL_ROOTS: &[(&str, &str, &str)] = &[
     // (".paa_metabin.jsonl", ".paa_metabin", ".jsonl"),     // disabled
     // (".nav.jsonl",         ".nav",         ".jsonl"),     // disabled
     (".dds.png",           ".dds",         ".png"),
+    (".pam.fbx",           ".pam",         ".fbx"),
+    (".pamlod.fbx",        ".pamlod",      ".fbx"),
+    (".pac.fbx",           ".pac",         ".fbx"),
 ];
 
 // -- Public types --------------------------------------------------------------
@@ -54,6 +58,9 @@ pub enum VirtualKind {
     PaaMetabinJsonl,
     NavJsonl,
     DdsPng,
+    PamFbx,
+    PamlodFbx,
+    PacFbx,
 }
 
 pub struct VirtualFile {
@@ -137,6 +144,9 @@ fn kind_for(ext: &str) -> VirtualKind {
         ".paa_metabin" => VirtualKind::PaaMetabinJsonl,
         ".nav"         => VirtualKind::NavJsonl,
         ".dds"         => VirtualKind::DdsPng,
+        ".pam"         => VirtualKind::PamFbx,
+        ".pamlod"      => VirtualKind::PamlodFbx,
+        ".pac"         => VirtualKind::PacFbx,
         _              => unreachable!("unknown virtual ext: {ext}"),
     }
 }
@@ -288,6 +298,32 @@ pub fn parse_png_to_dds(png_data: &[u8], original_dds_data: &[u8], path: &str) -
     dds.write(&mut out)
         .map_err(|e| warn!("parse_png_to_dds {path}: write DDS: {e}")).ok()?;
     Some(out)
+}
+
+// -- Mesh → FBX renderers -------------------------------------------------------
+
+pub fn render_pam_fbx(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let mesh = parse_pam(data, path).map_err(|e| warn!("render_pam_fbx {path}: {e}")).ok()?;
+    let refs: Vec<&_> = mesh.submeshes.iter().collect();
+    let name = std::path::Path::new(path).file_stem()
+        .and_then(|s| s.to_str()).unwrap_or(path);
+    Some(submeshes_to_fbx(&refs, name))
+}
+
+pub fn render_pamlod_fbx(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let mesh = parse_pamlod(data, path).map_err(|e| warn!("render_pamlod_fbx {path}: {e}")).ok()?;
+    let refs: Vec<&_> = mesh.submeshes.iter().collect();
+    let name = std::path::Path::new(path).file_stem()
+        .and_then(|s| s.to_str()).unwrap_or(path);
+    Some(submeshes_to_fbx(&refs, name))
+}
+
+pub fn render_pac_fbx(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let mesh = parse_pac(data, path).map_err(|e| warn!("render_pac_fbx {path}: {e}")).ok()?;
+    let refs: Vec<&_> = mesh.submeshes.iter().map(|s| &s.base).collect();
+    let name = std::path::Path::new(path).file_stem()
+        .and_then(|s| s.to_str()).unwrap_or(path);
+    Some(submeshes_to_fbx(&refs, name))
 }
 
 // -- Write-back: JSONL -> binary -----------------------------------------------
