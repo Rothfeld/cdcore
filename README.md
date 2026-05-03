@@ -136,12 +136,12 @@ Each tagged release on GitHub attaches:
 |------|-------------|
 | `cdcore-X.Y.Z-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | cdcore wheel — Linux x86-64 |
 | `cdcore-X.Y.Z-cp312-cp312-win_amd64.whl` | cdcore wheel — Windows x86-64 |
-| `cdfuse-linux-x86_64` | cdfuse binary — Linux |
-| `cdwinfs-windows-x86_64` | cdwinfs binary — Windows |
+| `cdfuse` | cdfuse binary — Linux |
+| `cdwinfs.exe` | cdwinfs binary — Windows |
 
-The Linux wheel carries both the `manylinux_2_17_x86_64` (new-style, PEP 600)
-and `manylinux2014_x86_64` (old-style) platform tags.  Both refer to the same
-file; pip selects it automatically on any supported Linux distribution.
+The Linux wheel carries both the `manylinux_2_17_x86_64` (PEP 600) and
+`manylinux2014_x86_64` (legacy) platform tags in its filename.  Both refer to
+the same file; pip selects it automatically on any supported Linux distribution.
 
 Install the cdcore wheel:
 ```bash
