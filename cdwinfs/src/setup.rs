@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use ratatui::{
     backend::CrosstermBackend,
-    crossterm::{event::{self, Event, KeyCode, KeyModifiers}, terminal},
+    crossterm::{event::{self, Event, KeyCode, KeyEventKind, KeyModifiers}, terminal},
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -190,6 +190,7 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Option<(Stri
         let ev = match event::read() { Ok(e) => e, Err(_) => continue };
 
         let Event::Key(key) = ev else { continue };
+        if key.kind != KeyEventKind::Press { continue; }
 
         // Collect any state transition outside the borrow so we can reassign.
         let mut next: Option<State> = None;
