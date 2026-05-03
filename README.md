@@ -102,17 +102,23 @@ modifying the archives:
 ```
 .paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl   (localisation text)
 .dds.png/ui/bitmap_bell.dds.png                            (textures as PNG)
-.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx          (static mesh)
-.pamlod.fbx/character/cd_phm_basic_body.pamlod.fbx         (LOD mesh)
-.pac.fbx/character/cd_phm_basic_body.pac.fbx               (skinned mesh)
+.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx          (static mesh as FBX)
+.pamlod.fbx/character/cd_phm_basic_body.pamlod.fbx         (LOD mesh as FBX)
+.pac.fbx/character/cd_phm_basic_body.pac.fbx               (skinned mesh as FBX)
+.wem.ogg/audio/vo_en_main_001.wem.ogg                      (audio as OGG)
 ```
 
 `.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts it
 back to the original binary format and repacks it automatically.
 
-The FBX exporter is a Rust port of CrimsonForge's `mesh_exporter.py`,
-producing binary FBX 7.4 files compatible with Blender, Maya, and Unreal.
-Geometry only for now; skeleton support is planned.
+The FBX exporter is a Rust port of CrimsonForge's `mesh_exporter.py`, producing
+binary FBX 7.4 files compatible with Blender, Maya, and Unreal. Geometry only
+for now; skeleton support is planned.
+
+`.wem.ogg/` requires [vgmstream-cli](https://github.com/vgmstream/vgmstream) to
+be installed (ISC licence). The TUI header shows `vgm` and `ffmpeg` in green
+when the tools are found, red when absent. The audio root is hidden entirely if
+vgmstream is not installed.
 
 ```bash
 # Edit German localisation
@@ -123,6 +129,9 @@ krita /media/max/cd/.dds.png/ui/bitmap_bell.dds.png
 
 # Open a mesh in Blender
 blender /media/max/cd/.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx
+
+# Play a voice line
+mpv /media/max/cd/.wem.ogg/audio/vo_en_main_001.wem.ogg
 ```
 
 ---
@@ -180,3 +189,4 @@ pip install cdcore-*.whl
 - `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
 - `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed — the installer registers the DLL path; `cdwinfs.exe` finds it automatically
 - `ddsthumb`: none (statically linked)
+- **Audio virtual view** (optional): [vgmstream-cli](https://github.com/vgmstream/vgmstream) for `.wem.ogg/`; [ffmpeg](https://ffmpeg.org) for future write-back. Both are detected at startup from `PATH` or `~/.crimsonforge/tools/` (Linux) / `%APPDATA%\CrimsonForge\tools\` (Windows).
