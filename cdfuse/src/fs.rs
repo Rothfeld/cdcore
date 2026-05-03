@@ -65,15 +65,6 @@ const ABSENT_ATTR: FileAttr = FileAttr {
     perm: 0, nlink: 0, uid: 0, gid: 0, rdev: 0, blksize: 0, flags: 0,
 };
 
-macro_rules! timed {
-    ($label:expr, $body:expr) => {{
-        let _t = Instant::now();
-        let _r = $body;
-        let _ms = _t.elapsed().as_millis();
-        if _ms >= SLOW_MS { warn!("SLOW {} {}ms", $label, _ms); }
-        _r
-    }};
-}
 
 // -- PNG header builder -------------------------------------------------------
 
@@ -121,8 +112,6 @@ struct DirEntry {
     ino:      u64,
     attr:     FileAttr,
     name:     String,
-    path:     Box<str>,
-    is_dir:   bool,
     attr_ttl: Duration,
 }
 
@@ -441,10 +430,8 @@ impl SharedFs {
 
         let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
         let mut entries = vec![
-            DirEntry { ino, attr: self.dir_attr(ino), name: ".".into(),
-                       path: path.into(), is_dir: true, attr_ttl: TTL },
-            DirEntry { ino: parent_ino, attr: self.dir_attr(parent_ino),
-                       name: "..".into(), path: parent_path(path).into(), is_dir: true, attr_ttl: TTL },
+            DirEntry { ino, attr: self.dir_attr(ino), name: ".".into(), attr_ttl: TTL },
+            DirEntry { ino: parent_ino, attr: self.dir_attr(parent_ino), name: "..".into(), attr_ttl: TTL },
         ];
 
         let children = self.vfs.list_dir_with_sizes_unsorted(path);
@@ -458,8 +445,7 @@ impl SharedFs {
                 queue_batch.push((vino, Box::from(vdir_name), true));
                 entries.push(DirEntry {
                     ino: vino, attr: self.dir_attr(vino),
-                    name: vdir_name.to_string(), path: Box::from(vdir_name),
-                    is_dir: true, attr_ttl: TTL,
+                    name: vdir_name.to_string(), attr_ttl: TTL,
                 });
             }
         }
@@ -473,8 +459,7 @@ impl SharedFs {
                 self.file_attr(child_ino, &child_path, *orig_size as u64)
             };
             queue_batch.push((child_ino, child_path.clone().into(), *is_dir));
-            entries.push(DirEntry { ino: child_ino, attr, name: name.clone(),
-                                    path: child_path.into(), is_dir: *is_dir, attr_ttl: TTL });
+            entries.push(DirEntry { ino: child_ino, attr, name: name.clone(), attr_ttl: TTL });
         }
 
         self.path_queue.lock().unwrap().push(queue_batch);
@@ -488,10 +473,8 @@ impl SharedFs {
                                   vdir: &virtual_files::VirtualDirInfo) -> Vec<DirEntry> {
         let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
         let mut entries = vec![
-            DirEntry { ino, attr: self.dir_attr(ino), name: ".".into(),
-                       path: path.into(), is_dir: true, attr_ttl: TTL },
-            DirEntry { ino: parent_ino, attr: self.dir_attr(parent_ino),
-                       name: "..".into(), path: parent_path(path).into(), is_dir: true, attr_ttl: TTL },
+            DirEntry { ino, attr: self.dir_attr(ino), name: ".".into(), attr_ttl: TTL },
+            DirEntry { ino: parent_ino, attr: self.dir_attr(parent_ino), name: "..".into(), attr_ttl: TTL },
         ];
 
         let children = self.vfs.list_dir_with_sizes_unsorted(&vdir.real_path);
@@ -513,7 +496,7 @@ impl SharedFs {
                 queue_batch.push((child_vino, child_vpath.clone().into(), true));
                 entries.push(DirEntry {
                     ino: child_vino, attr: self.dir_attr(child_vino),
-                    name: name.clone(), path: child_vpath.into(), is_dir: true, attr_ttl: TTL,
+                    name: name.clone(), attr_ttl: TTL,
                 });
             } else if name.ends_with(vdir.filter_ext) {
                 let should_add = if vdir.filter_ext == ".pabgb" {
@@ -539,7 +522,7 @@ impl SharedFs {
                     queue_batch.push((vino, vpath.clone().into(), false));
                     entries.push(DirEntry {
                         ino: vino, attr: self.file_attr(vino, &vpath, *orig_size as u64),
-                        name: virt_name, path: vpath.into(), is_dir: false,
+                        name: virt_name,
                         attr_ttl: Duration::ZERO,
                     });
                 }

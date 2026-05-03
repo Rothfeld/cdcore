@@ -141,7 +141,7 @@ fn parse_lod(data: &[u8], filename: &str, lod_level: usize) -> Result<ParsedMesh
     };
 
     let total_v: usize = group.iter().map(|e| e.nv).sum();
-    let total_i: usize = group.iter().map(|e| e.ni).sum();
+    let _total_i: usize = group.iter().map(|e| e.ni).sum();
     let idx_base_in_buf = buf_start + total_v * stride;
     let has_uv = stride >= 12;
 

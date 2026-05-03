@@ -145,10 +145,6 @@ fn main() {
 
     if std::io::stdin().is_terminal() {
         match tui::run(&mount, Arc::clone(&shared)) {
-            tui::Action::Commit => {
-                drop(shared);
-                eprintln!("Repacking...");
-            }
             tui::Action::Abort => {
                 shared.discard_pending();
                 drop(shared);

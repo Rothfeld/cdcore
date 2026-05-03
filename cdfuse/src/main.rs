@@ -154,11 +154,6 @@ fn main() {
             Arc::new(Mutex::new(Some(session)));
 
         match tui::run(&mount, Arc::clone(&shared)) {
-            tui::Action::Commit => {
-                drop(shared);
-                eprintln!("Repacking...");
-                session.lock().unwrap().take();
-            }
             tui::Action::Abort => {
                 shared.discard_pending();
                 drop(shared);

@@ -215,8 +215,6 @@ fn config_loop(
         None,
         Quit,
         Mount,
-        PickerNav(i32),
-        PickerUp,
         PickerSelect(PathBuf),
         PickerBack,
         OpenPicker,
@@ -311,7 +309,6 @@ fn config_loop(
                 // Enter/Esc exits edit mode without requiring a letter (allows cancelling).
                 st.body = ConfigBody::Fields { editing_mount: false };
             }
-            A::PickerNav(_) | A::PickerUp => unreachable!(),
         }
     }
 }
@@ -479,7 +476,7 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
 // Normal post-mount TUI (pending writes + events)
 // ============================================================================
 
-pub enum Action { Commit, Abort }
+pub enum Action { Abort }
 
 pub fn run(mount: &str, shared: Arc<SharedFs>) -> Action {
     terminal::enable_raw_mode().expect("enable raw mode");

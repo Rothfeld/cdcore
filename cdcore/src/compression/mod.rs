@@ -263,7 +263,7 @@ fn try_decompress_type1_dds_per_mip_sizes(data: &[u8], orig_size: usize) -> Resu
                 out.extend_from_slice(chunk);
                 pos += size;
             }
-            lvl = info.mip_count;
+            let _ = info.mip_count;
             break;
         }
 

@@ -157,7 +157,7 @@ fn config_loop(
 
     enum A {
         None, Quit, Mount,
-        PickerNav(i32), PickerActivate, PickerTab, PickerBack,
+        PickerActivate, PickerTab, PickerBack,
         OpenPicker, StartEditMount,
         MountChar(char), MountPop, MountDone,
     }
@@ -241,7 +241,6 @@ fn config_loop(
             A::MountChar(c) => { st.mount.push(c); }
             A::MountPop     => { st.mount.pop(); }
             A::MountDone    => { st.body = ConfigBody::Fields { editing_mount: false }; }
-            A::PickerNav(_) => unreachable!(),
         }
     }
 }
@@ -387,7 +386,7 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
 // Post-mount TUI (pending writes + events)
 // ============================================================================
 
-pub enum Action { Commit, Abort }
+pub enum Action { Abort }
 
 pub fn run(mount: &str, shared: Arc<SharedFs>) -> Action {
     terminal::enable_raw_mode().expect("enable raw mode");
