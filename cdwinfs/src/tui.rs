@@ -258,7 +258,7 @@ fn config_loop(
                     }
                 } else {
                     match (key.code, key.modifiers) {
-                        (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => A::Quit,
+                        (KeyCode::Esc, _) => A::Quit,
                         (KeyCode::Enter, _)                  => A::Mount,
                         (KeyCode::Char('g'), KeyModifiers::NONE) => A::OpenPicker,
                         (KeyCode::Char('m'), KeyModifiers::NONE) => A::StartEditMount,
@@ -516,9 +516,7 @@ fn event_loop(
                         });
                     }
 
-                    (KeyCode::Char('q'), _)
-                    | (KeyCode::Char('Q'), _)
-                    | (KeyCode::Esc,      _)
+                    (KeyCode::Esc, _)
                     | (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Action::Abort,
 
                     _ => {}
@@ -626,7 +624,7 @@ fn draw(
             Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
         }),
         Span::raw(" commit and exit    "),
-        Span::styled("[q]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Span::raw(" quit without saving"),
     ]))
     .block(Block::default().borders(Borders::ALL));
