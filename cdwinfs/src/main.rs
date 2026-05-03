@@ -1,5 +1,4 @@
-use std::io::IsTerminal;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use clap::Parser;
 use log::info;
@@ -10,19 +9,15 @@ mod tui;
 mod virtual_files;
 
 #[derive(Parser)]
-#[command(name = "cdfuse", about = "Mount Crimson Desert archives as a filesystem")]
+#[command(name = "cdwinfs", about = "Mount Crimson Desert archives as a Windows filesystem via WinFSP")]
 struct Args {
-    /// Commit pending writes and unmount: cdfuse --unmount <mountpoint>
-    #[arg(long, value_name = "MOUNTPOINT", exclusive = true)]
-    unmount: Option<String>,
+    /// Path to the Crimson Desert install directory (contains 0000/, meta/, ...)
+    #[arg(value_name = "GAME_DIR")]
+    game_dir: String,
 
-    /// Path to the Crimson Desert install directory (contains 0000/, 0001/, meta/, ...)
-    #[arg(required_unless_present = "unmount", value_name = "GAME_DIR")]
-    game_dir: Option<String>,
-
-    /// Mount point
-    #[arg(required_unless_present = "unmount")]
-    mount: Option<String>,
+    /// Mount point — drive letter (X:) or empty directory path
+    #[arg(value_name = "MOUNT")]
+    mount: String,
 
     /// Mount read-only (no writes to PAZ archives)
     #[arg(long)]
@@ -39,30 +34,19 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let log_to_tui = args.unmount.is_none() && std::io::stdin().is_terminal();
-    if log_to_tui {
-        let f = std::fs::File::create("/tmp/cdfuse.log")
-            .expect("cannot open /tmp/cdfuse.log");
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .target(env_logger::Target::Pipe(Box::new(f)))
-            .init();
-    } else {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    }
 
-    if args.unmount.is_some() {
-        let mp = args.unmount.as_deref().unwrap();
-        let status = std::process::Command::new("fusermount")
-            .args(["-u", mp])
-            .status()
-            .unwrap_or_else(|e| { eprintln!("fusermount: {e}"); std::process::exit(1); });
-        std::process::exit(if status.success() { 0 } else { 1 });
-    }
+    // Log to file so the TUI can own the console.
+    let f = std::fs::File::create("cdwinfs.log")
+        .expect("cannot open cdwinfs.log");
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .target(env_logger::Target::Pipe(Box::new(f)))
+        .init();
 
-    let game_dir = args.game_dir.as_deref().unwrap();
-    let mount    = args.mount.as_deref().unwrap();
+    // winfsp_init_or_die: tries local winfsp-x64.dll first, then falls back to
+    // HKLM\SOFTWARE\WinFsp\InstallDir via the `system` feature.
+    let _init = winfsp::winfsp_init_or_die();
 
-    let vfs = VfsManager::new(game_dir).unwrap_or_else(|e| {
+    let vfs = VfsManager::new(&args.game_dir).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
@@ -86,49 +70,48 @@ fn main() {
         }
     }
 
-    let fs     = fs::CdFs::new(vfs, args.readonly);
-    let shared = fs.shared();
+    let cdfs   = fs::CdWinFs::new(vfs, args.readonly);
+    let shared = cdfs.shared();
 
-    let mut options = vec![
-        fuser::MountOption::FSName("cdfuse".to_string()),
-        fuser::MountOption::Subtype("cdfuse".to_string()),
-        fuser::MountOption::AutoUnmount,
-    ];
-    if args.readonly {
-        options.push(fuser::MountOption::RO);
-    }
+    let mut volume_params = winfsp::host::VolumeParams::new();
+    volume_params
+        .sector_size(512)
+        .sectors_per_allocation_unit(1)
+        .max_component_length(255)
+        .volume_creation_time(0)
+        .volume_serial_number(0x00CDF00D)
+        .file_info_timeout(1000)
+        .irp_timeout(60_000)
+        .case_sensitive_search(true)
+        .case_preserved_names(true)
+        .unicode_on_disk(true)
+        .persistent_acls(false)
+        .read_only_volume(args.readonly)
+        .filesystem_name("cdwinfs");
 
-    info!("mounting {} at {} ({})", game_dir, mount,
+    let mut host = winfsp::host::FileSystemHost::new(volume_params, cdfs)
+        .unwrap_or_else(|e| { eprintln!("create host: {e}"); std::process::exit(1); });
+
+    host.mount(&args.mount)
+        .unwrap_or_else(|e| { eprintln!("mount {}: {e}", args.mount); std::process::exit(1); });
+
+    host.start()
+        .unwrap_or_else(|e| { eprintln!("start dispatcher: {e}"); std::process::exit(1); });
+
+    info!("mounted {} at {} ({})", args.game_dir, args.mount,
           if args.readonly { "ro" } else { "rw" });
 
-    if std::io::stdin().is_terminal() {
-        let session = match fuser::spawn_mount2(fs, mount, &options) {
-            Ok(s)  => s,
-            Err(e) => {
-                log::error!("mount failed: {e}");
-                eprintln!("mount failed: {e}");
-                std::process::exit(1);
-            }
-        };
-        let session: Arc<Mutex<Option<fuser::BackgroundSession>>> =
-            Arc::new(Mutex::new(Some(session)));
-
-        match tui::run(mount, Arc::clone(&shared)) {
-            tui::Action::Commit => {
-                drop(shared);
-                eprintln!("Repacking...");
-                session.lock().unwrap().take();
-            }
-            tui::Action::Abort => {
-                shared.discard_pending();
-                drop(shared);
-                session.lock().unwrap().take();
-            }
+    match tui::run(&args.mount, Arc::clone(&shared)) {
+        tui::Action::Commit => {
+            drop(shared);
+            eprintln!("Repacking...");
         }
-    } else {
-        fuser::mount2(fs, mount, &options).unwrap_or_else(|e| {
-            log::error!("mount failed: {e}");
-            std::process::exit(1);
-        });
+        tui::Action::Abort => {
+            shared.discard_pending();
+            drop(shared);
+        }
     }
+
+    // Drop host: stop() + unmount() called by Drop impl.
+    drop(host);
 }

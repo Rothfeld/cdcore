@@ -16,7 +16,7 @@ use ratatui::{
     Terminal,
 };
 
-use crate::fs::SharedFs;
+use crate::fs::SharedFs; // SharedFs is identical in cdwinfs
 
 pub enum Action { Commit, Abort }
 
@@ -94,7 +94,7 @@ fn draw(f: &mut ratatui::Frame, mount: &str, pending: &[String], saving: bool) {
     // -- Header ----------------------------------------------------------------
     let header = Paragraph::new(Line::from(vec![
         Span::raw(" "),
-        Span::styled("cdfuse", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled("cdwinfs", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(mount, Style::default().fg(Color::Cyan)),
         Span::raw("  (rw)"),
