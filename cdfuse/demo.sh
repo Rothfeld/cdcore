@@ -39,7 +39,7 @@ sleep 2.5
 
 step "localisation strings as editable JSON"
 cmd "ls .paloc.jsonl/gamedata/"
-ls .paloc.jsonl/gamedata/
+ls .paloc.jsonl/gamedata/ | head -5
 sleep 1.5
 
 PALOC=$(ls .paloc.jsonl/gamedata/ | grep eng | head -1)
