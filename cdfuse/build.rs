@@ -3,5 +3,5 @@ fn main() {
     // (HKLM\SOFTWARE\WinFsp\InstallDir) rather than requiring it on PATH.
     // WinFsp must be installed: https://winfsp.dev/rel/
     #[cfg(windows)]
-    winfsp_build::winfsp_link_delayload();
+    winfsp::build::winfsp_link_delayload();
 }
