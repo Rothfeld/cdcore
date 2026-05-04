@@ -482,7 +482,7 @@ fn draw(
         Span::styled(mount, Style::default().fg(Color::Cyan)),
         Span::styled(rw_label, rw_style),
         Span::raw("  "),
-        Span::styled("wemcodec",
+        Span::styled("cdcore::formats::audio",
             Style::default().fg(if has_vgmstream { Color::Green } else { Color::Red })),
         Span::raw(" "),
         Span::styled("ffmpeg",

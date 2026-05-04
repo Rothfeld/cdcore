@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod audio;
 pub mod data;
 pub mod dds;
 pub mod mesh;

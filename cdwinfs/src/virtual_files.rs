@@ -66,7 +66,7 @@ pub enum VirtualKind {
 }
 
 /// Returns true for virtual roots that require vgmstream to render.
-/// Always false — WEM rendering is handled by wemcodec (no external tool needed).
+/// Always false — WEM rendering is handled by cdcore::formats::audio (no external tool needed).
 pub fn root_requires_vgmstream(_vdir_name: &str) -> bool {
     false
 }
@@ -339,7 +339,7 @@ pub fn render_pac_fbx(data: &[u8], path: &str) -> Option<Vec<u8>> {
 
 /// Decode WEM (Wwise Encoded Media) to OGG Vorbis using wmmogg.
 pub fn render_wem_ogg(data: &[u8], path: &str) -> Option<Vec<u8>> {
-    wemcodec::wem_to_ogg(data)
+    cdcore::formats::audio::wem_to_ogg(data)
         .map_err(|e| warn!("render_wem_ogg {path}: {e}"))
         .ok()
 }

@@ -18,6 +18,10 @@ rayon = "1"                                               # parallel PAMT group 
 thiserror = "2"                                           # ParseError derive
 sha1 = "0.11"                                             # PAC mesh baseline snapshots
 hex = "0.4"                                               # SHA-1 hex encoding for baseline filenames
+log = "0.4"                                               # logging facade (audio module)
+byteorder = "1.5"                                         # WEM RIFF multi-byte field encoding
+ww2ogg = "0.1"                                            # WEM->OGG forward conversion
+sha2 = "0.11"                                             # codebook hash LUT for setup stripping
 pyo3          = { version = "0.28", optional = true }
 pyo3-stub-gen = { version = "0.22", optional = true }
 
