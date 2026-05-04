@@ -128,10 +128,9 @@ cdfuse --licenses                  # print third-party dependency licenses
     bitmap_bell.dds
 ```
 
-**Virtual read-only views:**
+**Virtual views:**
 
-Hidden root directories expose binary files in more usable formats without
-modifying the archives:
+Hidden root directories expose binary files in more usable formats:
 
 ```
 .paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl   (localisation text)
@@ -146,9 +145,6 @@ modifying the archives:
 ```
 
 `.paloc.jsonl/` and `.dds.png/` support write-back: save converts to binary and repacks.
-
-`.wem.ogg/` is handled entirely in Rust by `cdcore::formats::audio` — no
-external tools required. OGG conversion is on-demand and lossless.
 
 Directories present in multiple packages get `name@group` aliases alongside
 the default. Crimson Desert ships three voice-over languages in separate packages
@@ -190,11 +186,6 @@ Each tagged release on GitHub attaches:
 
 Third-party dependency licenses are embedded in each binary (`--licenses` flag)
 and in the cdcore wheel (`THIRD_PARTY_LICENSES.md`).
-
-Install the cdcore wheel:
-```bash
-pip install cdcore-*.whl
-```
 
 ## Build requirements
 
