@@ -6,5 +6,7 @@ cargo fetch --manifest-path cdcore\Cargo.toml
 python tools\generate_licenses.py cdwinfs\Cargo.toml cdwinfs\THIRD_PARTY_LICENSES.md
 python tools\generate_licenses.py cdcore\Cargo.toml  cdcore\THIRD_PARTY_LICENSES.md
 
-cargo build --release --manifest-path cdcore\Cargo.toml
+cargo run --release --manifest-path cdcore\Cargo.toml --bin stub_gen --features python
+copy cdcore\python\cdcore.pyi cdcore\python\cdcore\__init__.pyi
+maturin build --release --manifest-path cdcore\Cargo.toml --features python
 cargo build --release --manifest-path cdwinfs\Cargo.toml

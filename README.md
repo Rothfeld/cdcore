@@ -1,5 +1,11 @@
 ## Crates
 
+| Crate | Platform | Description |
+|-------|----------|-------------|
+| [`cdcore`](#cdcore) | any | Rust library — VFS, parsers, crypto, audio, DDS; exposed to Python via PyO3 |
+| [`cdfuse`](#cdfuse-linux--cdwinfs-windows) | Linux | FUSE filesystem mount for Crimson Desert archives |
+| [`cdwinfs`](#cdfuse-linux--cdwinfs-windows) | Windows | WinFSP filesystem mount for Crimson Desert archives (GPL-3.0) |
+
 These crates are unaffiliated companion tooling for the excellent
 [CrimsonForge](https://github.com/hzeemr/crimsonforge) modding studio.
 The archive formats, crypto, compression, mesh parsers, FBX export logic,
@@ -44,18 +50,19 @@ By default, closing a modified file immediately repacks it into the PAZ archives
 in the background. Pass `--no-auto-repack` to disable this and use `[s]` to
 flush manually instead.
 
-| Crate | Platform | Driver | Requirement |
-|-------|----------|--------|-------------|
-| `cdfuse` | Linux | FUSE via `fuser` | `libfuse3`, `user_allow_other` in `/etc/fuse.conf` |
-| `cdwinfs` | Windows | [WinFsp](https://winfsp.dev/rel/) | WinFsp 2.x installed |
+| Crate | Platform | Driver | License | Requirement |
+|-------|----------|--------|---------|-------------|
+| `cdfuse` | Linux | FUSE via `fuser` | MIT | `libfuse3`, `user_allow_other` in `/etc/fuse.conf` |
+| `cdwinfs` | Windows | [WinFsp](https://winfsp.dev/rel/) | GPL-3.0 | WinFsp 2.x installed |
+
+`cdwinfs` is GPL-3.0 because `winfsp-rs` (the Rust WinFSP bindings) declares
+GPL-3.0. The underlying WinFSP driver has a FLOSS exception; replacing the
+binding crate with hand-generated bindgen output would allow relicensing to MIT.
 
 **Build:**
 ```bash
-cd cdfuse       # Linux
-cargo build --release
-
-cd cdwinfs      # Windows
-cargo build --release
+bash build.sh     # Linux  — generates licenses, builds cdcore + cdfuse
+build.cmd         # Windows — generates licenses, builds cdcore + cdwinfs
 ```
 
 **First launch — interactive setup:**
@@ -79,6 +86,7 @@ are filled.
 ```bash
 cdfuse [GAME_DIR] [MOUNT]          # Linux — args override saved config
 cdwinfs.exe [GAME_DIR] [DRIVE]     # Windows — DRIVE is a single letter, e.g. Y
+cdfuse --licenses                  # print third-party dependency licenses
 ```
 
 **TUI while mounted:**
@@ -114,20 +122,17 @@ modifying the archives:
 .pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx          (static mesh as FBX)
 .pamlod.fbx/character/cd_phm_basic_body.pamlod.fbx         (LOD mesh as FBX)
 .pac.fbx/character/cd_phm_basic_body.pac.fbx               (skinned mesh as FBX)
-.wem.ogg/audio/vo_en_main_001.wem.ogg                      (audio as OGG)
+.wem.ogg/sound/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg  (audio as OGG)
 ```
 
 `.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts it
 back to the original binary format and repacks it automatically.
 
-The FBX exporter is a Rust port of CrimsonForge's `mesh_exporter.py`, producing
-binary FBX 7.4 files compatible with Blender, Maya, and Unreal. Geometry only
-for now; skeleton support is planned.
+`.wem.ogg/` is handled entirely in Rust by `cdcore::formats::audio` — no
+external tools required. OGG conversion is on-demand and lossless.
 
-`.wem.ogg/` requires [vgmstream-cli](https://github.com/vgmstream/vgmstream) to
-be installed (ISC licence). The TUI header shows `vgm` and `ffmpeg` in green
-when the tools are found, red when absent. The audio root is hidden entirely if
-vgmstream is not installed.
+The FBX exporter is a Rust port of CrimsonForge's `mesh_exporter.py`, producing
+binary FBX 7.4 files compatible with Blender, Maya, and Unreal.
 
 ```bash
 # Edit German localisation
@@ -140,26 +145,7 @@ krita /media/max/cd/.dds.png/ui/bitmap_bell.dds.png
 blender /media/max/cd/.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx
 
 # Play a voice line
-mpv /media/max/cd/.wem.ogg/audio/vo_en_main_001.wem.ogg
-```
-
----
-
-### `ddsthumb`
-
-Batch DDS-to-PNG thumbnail generator. Takes a `.dds` file or directory
-(scanned recursively) and writes resized PNGs to an output directory,
-preserving the relative path structure. Handles all formats supported
-by `cdcore`: BC1-BC7, BC6H, RGBA, float variants.
-
-```bash
-# Single file
-ddsthumb ui/bitmap_bell.dds /tmp/thumbs --size 128
-
-# Entire tree
-ddsthumb /media/max/cd/ui /tmp/thumbs --size 256
-# Found 18355 DDS files -- generating 256px thumbnails ...
-#   1000/18355  errors=0
+mpv /media/max/cd/.wem.ogg/sound/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg
 ```
 
 ---
@@ -172,12 +158,11 @@ Each tagged release on GitHub attaches:
 |------|-------------|
 | `cdcore-X.Y.Z-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | cdcore wheel — Linux x86-64 |
 | `cdcore-X.Y.Z-cp312-cp312-win_amd64.whl` | cdcore wheel — Windows x86-64 |
-| `cdfuse` | cdfuse binary — Linux |
-| `cdwinfs.exe` | cdwinfs binary — Windows |
+| `cdfuse` | cdfuse binary — Linux (MIT) |
+| `cdwinfs.exe` | cdwinfs binary — Windows (GPL-3.0) |
 
-The Linux wheel carries both the `manylinux_2_17_x86_64` (PEP 600) and
-`manylinux2014_x86_64` (legacy) platform tags in its filename.  Both refer to
-the same file; pip selects it automatically on any supported Linux distribution.
+Third-party dependency licenses are embedded in each binary (`--licenses` flag)
+and in the cdcore wheel (`THIRD_PARTY_LICENSES.md`).
 
 Install the cdcore wheel:
 ```bash
@@ -189,6 +174,7 @@ pip install cdcore-*.whl
 - Rust 1.70+
 - Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`) — pyo3 links against libpython at compile time
 - [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`) — builds the cdcore wheel
+- `cargo-license` (`cargo install cargo-license`) — generates third-party license files during build
 - **Linux:** `libfuse3-dev` (`apt install libfuse3-dev`) — cdfuse links against libfuse3 at compile time
 - **Windows:** LLVM/clang for `winfsp-sys` bindgen — pre-installed on `windows-latest` CI runners; locally install from [llvm.org](https://releases.llvm.org/)
 
@@ -197,5 +183,4 @@ pip install cdcore-*.whl
 - `cdcore` wheel: Python 3.10+, no other native dependencies
 - `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
 - `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed — the installer registers the DLL path; `cdwinfs.exe` finds it automatically
-- `ddsthumb`: none (statically linked)
-- **Audio virtual view** (optional): [vgmstream-cli](https://github.com/vgmstream/vgmstream) for `.wem.ogg/`; [ffmpeg](https://ffmpeg.org) for future write-back. Both are detected at startup from `PATH` or `~/.crimsonforge/tools/` (Linux) / `%APPDATA%\CrimsonForge\tools\` (Windows).
+- Audio virtual view (`.wem.ogg/`): no external tools — handled by `cdcore::formats::audio`
