@@ -21,7 +21,7 @@ fn read(vfs: &VfsManager, path: &str) -> Vec<u8> {
     vfs.read_entry(&entry).unwrap_or_else(|e| panic!("read failed for {path}: {e}"))
 }
 
-// ── PAM ─────────────────────────���────────────────────────────────────
+// ---- PAM --------------------------------------------------???------------------------------------------------------------------------
 
 #[test]
 fn pam_altarmarble() {
@@ -33,14 +33,14 @@ fn pam_altarmarble() {
 
 #[test]
 fn pam_statue_breakable_large_mesh() {
-    // total_verts=85593 (>65535) — exercises the algebraic stride path
+    // total_verts=85593 (>65535) -- exercises the algebraic stride path
     let Some(vfs) = vfs() else { return };
     let data = read(&vfs, "object/cd_ancient_puzzle_statue_02_breakable.pam");
     let mesh = parse_pam(&data, "cd_ancient_puzzle_statue_02_breakable.pam").unwrap();
     assert_eq!(mesh.total_vertices, 85593, "statue vertex count");
 }
 
-// ── PAMLOD ───────────────────────────────────────────────────────────
+// ---- PAMLOD ----------------------------------------------------------------------------------------------------------------------
 
 #[test]
 fn pamlod_sphere_uncompressed() {

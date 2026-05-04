@@ -14,7 +14,7 @@ clap      = { version = "4", features = ["derive"] }      # CLI argument parsing
 log       = "0.4"                                          # logging facade
 env_logger = "0.11"                                        # RUST_LOG env-var log backend
 lru       = "0.18"                                         # LRU decode cache with per-entry eviction
-memmap2   = "0.9"                                          # memory-mapped PAZ files — zero syscalls per read
+memmap2   = "0.9"                                          # memory-mapped PAZ files -- zero syscalls per read
 rayon     = "1"                                            # dedicated thread pool for concurrent file decodes
 ratatui   = "0.29"                                         # TUI framework (re-exports crossterm)
 png       = "0.17"                                         # PNG encoder for .dds.png/ virtual view
@@ -34,5 +34,5 @@ codegen-units = 1
 # Usage: cargo build --profile profiling
 [profile.profiling]
 inherits = "release"
-debug = true       # DWARF symbols → readable flamegraph frames
+debug = true       # DWARF symbols -> readable flamegraph frames
 lto = false        # faster incremental builds during profiling iterations

@@ -332,7 +332,7 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
             };
 
             let body_title = if editing_mount {
-                " Configuration — type mount path "
+                " Configuration -- type mount path "
             } else {
                 " Configuration "
             };

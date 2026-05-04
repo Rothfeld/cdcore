@@ -112,7 +112,7 @@ fn leaf(buf: &mut Vec<u8>, name: &str, props: &[Prop<'_>]) {
 // ---------------------------------------------------------------------------
 
 /// Encode a slice of SubMesh objects to binary FBX 7.4.
-/// Works for PAM, PAMLOD, and PAC (phase 1 — geometry only, no skeleton).
+/// Works for PAM, PAMLOD, and PAC (phase 1 -- geometry only, no skeleton).
 pub fn submeshes_to_fbx(submeshes: &[&SubMesh], mesh_name: &str) -> Vec<u8> {
     let mut buf = Vec::with_capacity(256 * 1024);
 

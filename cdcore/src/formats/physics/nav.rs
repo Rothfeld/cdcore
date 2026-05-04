@@ -1,6 +1,6 @@
 //! Navigation mesh parser.
 //!
-//! No header — starts directly with 16-byte cell records:
+//! No header -- starts directly with 16-byte cell records:
 //!   [0:4]   cell_id (u32 LE)
 //!   [4:8]   grid_ref (u32 LE, pattern 0xFEFFFFxx)
 //!   [8:12]  flags (u32 LE)

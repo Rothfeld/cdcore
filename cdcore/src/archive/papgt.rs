@@ -9,7 +9,7 @@
 //!             [4:8]  sequence
 //!             [8:12] pamt_crc
 //!
-//! Entries are positional — the Nth entry = Nth sorted package directory.
+//! Entries are positional -- the Nth entry = Nth sorted package directory.
 
 use crate::crypto::pa_checksum;
 use crate::error::{read_u32_le, Result};
@@ -94,7 +94,7 @@ pub fn update_self_crc(raw: &mut [u8]) -> u32 {
 
 /// Get the byte offset of the PAMT CRC for a given package group directory name.
 ///
-/// The PAPGT is positional — the Nth entry matches the Nth sorted directory.
+/// The PAPGT is positional -- the Nth entry matches the Nth sorted directory.
 pub fn pamt_crc_offset(papgt: &PapgtData, folder_number: u32) -> Option<usize> {
     let folder_name = format!("{folder_number:04}");
     let packages_path = std::path::Path::new(&papgt.packages_path);

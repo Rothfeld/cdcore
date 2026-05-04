@@ -407,7 +407,7 @@ impl SharedFs {
 
     // -- Probe read (mmap slice) ------------------------------------------------
     // Fast path for reads at offset 0 that request fewer bytes than the full file.
-    // Returns raw compressed bytes directly from the mmap — callers that only want
+    // Returns raw compressed bytes directly from the mmap -- callers that only want
     // magic bytes (e.g. `file(1)`, thumbnail generators) get a response without a
     // full decrypt+decompress cycle.  The bytes are NOT decrypted or decompressed,
     // which is intentional: the probe is only useful for compressed/encrypted blobs

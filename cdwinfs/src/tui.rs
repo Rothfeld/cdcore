@@ -161,7 +161,7 @@ impl ConfigState {
             Some(p) => (Some(p.to_string_lossy().into_owned()), true),
             None    => (None, false),
         };
-        // Normalise: accept "Y", "Y:", "y:", etc. — store as single uppercase letter.
+        // Normalise: accept "Y", "Y:", "y:", etc. -- store as single uppercase letter.
         let mount = drive_hint.chars()
             .find(|c| c.is_ascii_alphabetic())
             .map(|c| c.to_ascii_uppercase().to_string())
@@ -271,7 +271,7 @@ fn config_loop(
             A::Quit => return None,
             A::Mount => {
                 if st.can_mount() {
-                    // Append colon: "Y" → "Y:" as expected by WinFSP.
+                    // Append colon: "Y" -> "Y:" as expected by WinFSP.
                     return Some((st.game_dir.clone().unwrap(), format!("{}:", st.mount)));
                 }
             }
@@ -419,7 +419,7 @@ fn draw_config(f: &mut ratatui::Frame, st: &mut ConfigState) {
                 };
 
             let body_title = if editing_mount {
-                " Configuration — type A-Z "
+                " Configuration -- type A-Z "
             } else {
                 " Configuration "
             };

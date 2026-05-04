@@ -68,7 +68,7 @@ fn main() {
         .target(env_logger::Target::Pipe(Box::new(f)))
         .init();
 
-    // Resolve game_dir + mount: CLI args → saved config → interactive setup.
+    // Resolve game_dir + mount: CLI args -> saved config -> interactive setup.
     let (game_dir, mount) = match (args.game_dir.as_deref(), args.mount.as_deref()) {
         (Some(gd), Some(m)) => {
             let ch = m.chars().next().unwrap_or('\0');
@@ -84,7 +84,7 @@ fn main() {
             (gd.to_string(), drive)
         }
         _ => {
-            // No (or partial) CLI args — try saved config first.
+            // No (or partial) CLI args -- try saved config first.
             let saved = config::load();
             let game_dir_hint = saved.as_ref()
                 .map(|c| std::path::PathBuf::from(&c.game_dir))

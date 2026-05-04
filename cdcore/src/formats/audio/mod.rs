@@ -41,7 +41,7 @@ use self::ogg::{
 use ww2ogg::{CodebookLibrary, WwiseRiffVorbis};
 
 // ---------------------------------------------------------------------------
-// WEM → OGG
+// WEM -> OGG
 // ---------------------------------------------------------------------------
 
 pub fn wem_to_ogg(wem_bytes: &[u8]) -> Result<Vec<u8>> {
@@ -77,7 +77,7 @@ fn try_convert(wem_bytes: &[u8], codebooks: CodebookLibrary) -> Result<Vec<u8>> 
 }
 
 // ---------------------------------------------------------------------------
-// OGG → WEM (roundtrip — requires WEM_ROUNDTRIP_V1 tag)
+// OGG -> WEM (roundtrip -- requires WEM_ROUNDTRIP_V1 tag)
 // ---------------------------------------------------------------------------
 
 pub fn ogg_to_wem(ogg_bytes: &[u8]) -> Result<Vec<u8>> {
@@ -87,7 +87,7 @@ pub fn ogg_to_wem(ogg_bytes: &[u8]) -> Result<Vec<u8>> {
     }
     let meta = parse_roundtrip_comment(&packets[1])
         .ok_or_else(|| WemError::OggParse(
-            "WEM_ROUNDTRIP_V1 comment not found — ogg was not produced by cdcore audio".into()
+            "WEM_ROUNDTRIP_V1 comment not found -- ogg was not produced by cdcore audio".into()
         ))?;
     log::debug!("roundtrip meta: {meta:?}");
 

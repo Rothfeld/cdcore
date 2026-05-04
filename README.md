@@ -2,7 +2,7 @@
 
 | Crate | Platform | Description |
 |-------|----------|-------------|
-| [`cdcore`](#cdcore) | any | Rust library — VFS, parsers, crypto, audio, DDS; exposed to Python via PyO3 |
+| [`cdcore`](#cdcore) | any | Rust library -- VFS, parsers, crypto, audio, DDS; exposed to Python via PyO3 |
 | ├─ [`cdfuse`](#cdfuse-linux--cdwinfs-windows) | Linux | FUSE filesystem mount for Crimson Desert archives |
 | └─ [`cdwinfs`](#cdfuse-linux--cdwinfs-windows) | Windows | WinFSP filesystem mount for Crimson Desert archives (GPL-3.0) |
 
@@ -30,9 +30,9 @@ import cdcore  # monkeypatches vfs, dds reader and mesh reader with native imple
 
 Injects 3 proxies into `sys.modules`:
 
-- `core.vfs_manager.VfsManager` → Rust VFS (PAPGT + PAMT + PAZ, parallel load, LRU cache)
-- `core.dds_reader.decode_dds_to_rgba` → Rust DDS decoder (BC1-BC7, BC6H, float variants)
-- `core.mesh_parser.parse_pam` / `parse_pamlod` → Rust mesh parsers (30–70× faster)
+- `core.vfs_manager.VfsManager` -> Rust VFS (PAPGT + PAMT + PAZ, parallel load, LRU cache)
+- `core.dds_reader.decode_dds_to_rgba` -> Rust DDS decoder (BC1-BC7, BC6H, float variants)
+- `core.mesh_parser.parse_pam` / `parse_pamlod` -> Rust mesh parsers (30--70x faster)
 
 Other attributes fall through to Python. No other code changes needed.
 
@@ -82,7 +82,7 @@ binding crate with hand-generated bindgen output would allow relicensing to MIT.
 ![cdfuse demo](.assets/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?")
 
 
-**First launch — interactive setup:**
+**First launch -- interactive setup:**
 
 Both tools save their configuration (`~/.config/cdfuse/cdfuse.cfg` on Linux,
 `%APPDATA%\CrimsonForge\cdwinfs.cfg` on Windows) so they can be launched without
@@ -179,10 +179,10 @@ Each tagged release on GitHub attaches:
 
 | File | Description |
 |------|-------------|
-| `cdcore-X.Y.Z-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | cdcore wheel — Linux x86-64 |
-| `cdcore-X.Y.Z-cp312-cp312-win_amd64.whl` | cdcore wheel — Windows x86-64 |
-| `cdfuse` | cdfuse binary — Linux (MIT) |
-| `cdwinfs.exe` | cdwinfs binary — Windows (GPL-3.0) |
+| `cdcore-X.Y.Z-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | cdcore wheel -- Linux x86-64 |
+| `cdcore-X.Y.Z-cp312-cp312-win_amd64.whl` | cdcore wheel -- Windows x86-64 |
+| `cdfuse` | cdfuse binary -- Linux (MIT) |
+| `cdwinfs.exe` | cdwinfs binary -- Windows (GPL-3.0) |
 
 Third-party dependency licenses are embedded in each binary (`--licenses` flag)
 and in the cdcore wheel (`THIRD_PARTY_LICENSES.md`).
@@ -190,14 +190,14 @@ and in the cdcore wheel (`THIRD_PARTY_LICENSES.md`).
 ## Build requirements
 
 - Rust 1.70+
-- Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`) — pyo3 links against libpython at compile time
-- [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`) — builds the cdcore wheel
-- `cargo-license` (`cargo install cargo-license`) — generates third-party license files during build
-- **Linux:** `libfuse3-dev` (`apt install libfuse3-dev`) — cdfuse links against libfuse3 at compile time
-- **Windows:** LLVM/clang for `winfsp-sys` bindgen — pre-installed on `windows-latest` CI runners; locally install from [llvm.org](https://releases.llvm.org/)
+- Python 3.10+ with `libpython3.x-dev` (`apt install libpython3-dev`) -- pyo3 links against libpython at compile time
+- [maturin](https://github.com/PyO3/maturin) 1.0+ (`pip install maturin`) -- builds the cdcore wheel
+- `cargo-license` (`cargo install cargo-license`) -- generates third-party license files during build
+- **Linux:** `libfuse3-dev` (`apt install libfuse3-dev`) -- cdfuse links against libfuse3 at compile time
+- **Windows:** LLVM/clang for `winfsp-sys` bindgen -- pre-installed on `windows-latest` CI runners; locally install from [llvm.org](https://releases.llvm.org/)
 
 ## Runtime requirements
 
 - `cdcore` wheel: Python 3.10+, no other native dependencies
 - `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
-- `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed — the installer registers the DLL path; `cdwinfs.exe` finds it automatically
+- `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed -- the installer registers the DLL path; `cdwinfs.exe` finds it automatically

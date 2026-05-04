@@ -1,4 +1,4 @@
-//! PAZ archive reader — opaque binary blobs; all metadata is in PAMT.
+//! PAZ archive reader -- opaque binary blobs; all metadata is in PAMT.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

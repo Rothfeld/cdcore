@@ -65,7 +65,7 @@ pub enum VirtualKind {
 }
 
 /// Returns true for virtual roots that require vgmstream to render.
-/// Always false — WEM rendering is handled by cdcore::formats::audio (no external tool needed).
+/// Always false -- WEM rendering is handled by cdcore::formats::audio (no external tool needed).
 pub fn root_requires_vgmstream(_vdir_name: &str) -> bool {
     false
 }
@@ -312,7 +312,7 @@ pub fn parse_png_to_dds(png_data: &[u8], original_dds_data: &[u8], path: &str) -
         .map_err(|e| warn!("parse_png_to_dds {path}: encode: {e}")).ok()
 }
 
-// -- Mesh → FBX renderers -------------------------------------------------------
+// -- Mesh -> FBX renderers -------------------------------------------------------
 
 pub fn render_pam_fbx(data: &[u8], path: &str) -> Option<Vec<u8>> {
     let mesh = parse_pam(data, path).map_err(|e| warn!("render_pam_fbx {path}: {e}")).ok()?;

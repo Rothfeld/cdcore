@@ -1,5 +1,5 @@
 //! Auto-detection helpers for first-run defaults.
-//! No TUI code lives here — path selection is handled inside tui.rs.
+//! No TUI code lives here -- path selection is handled inside tui.rs.
 
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,7 @@ pub fn detect_game_dir() -> Option<PathBuf> {
     None
 }
 
-/// Return the first unused drive letter scanning Z → D (single char, no colon).
+/// Return the first unused drive letter scanning Z -> D (single char, no colon).
 pub fn detect_free_drive() -> Option<String> {
     for c in ('D'..='Z').rev() {
         if !PathBuf::from(format!("{c}:\\")).exists() {

@@ -107,11 +107,11 @@ class _DdsProxy(types.ModuleType):
 
 class _MeshParserProxy(types.ModuleType):
     """Proxy for core.mesh_parser that replaces parse_pam and parse_pamlod
-    with Rust implementations (30-70× faster) while delegating every other
+    with Rust implementations (30-70x faster) while delegating every other
     attribute to the real Python module.
 
     Patching the real module's globals on first load means that internal
-    calls such as parse_mesh → parse_pam also use the Rust path.
+    calls such as parse_mesh -> parse_pam also use the Rust path.
     """
 
     _real = None
@@ -140,20 +140,20 @@ class _MeshParserProxy(types.ModuleType):
         return getattr(self._load_real(), name)
 
 
-# Inject core.vfs_manager — any 'from core.vfs_manager import VfsManager'
+# Inject core.vfs_manager -- any 'from core.vfs_manager import VfsManager'
 # gets _RustVfsManager without the Python project needing to know.
 if "core.vfs_manager" not in sys.modules:
     _vfs_mod = types.ModuleType("core.vfs_manager")
     _vfs_mod.VfsManager = _RustVfsManager
     sys.modules["core.vfs_manager"] = _vfs_mod
 
-# Inject core.dds_reader — decode_dds_to_rgba is backed by Rust; all
+# Inject core.dds_reader -- decode_dds_to_rgba is backed by Rust; all
 # other attributes (read_dds_info, validate_dds_payload_size, etc.)
 # fall through to the real Python module on first access.
 if "core.dds_reader" not in sys.modules:
     sys.modules["core.dds_reader"] = _DdsProxy("core.dds_reader")
 
-# Inject core.mesh_parser — parse_pam and parse_pamlod are backed by Rust;
+# Inject core.mesh_parser -- parse_pam and parse_pamlod are backed by Rust;
 # everything else (parse_pac, ParsedMesh, SubMesh, _flatten_parsed_mesh_for_preview,
 # is_mesh_file, etc.) falls through to the real Python module on first access.
 if "core.mesh_parser" not in sys.modules:

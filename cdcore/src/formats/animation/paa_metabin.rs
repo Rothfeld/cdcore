@@ -54,7 +54,7 @@ pub fn parse(data: &[u8], filename: &str) -> Result<PaaMetabin> {
         let payload_start = off;
         while off < data.len() {
             if data[off] == 0x05 && off + 4 < data.len() {
-                // Possible next record — stop here
+                // Possible next record -- stop here
                 break;
             }
             off += 1;

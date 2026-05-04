@@ -115,7 +115,7 @@ pub fn parse(data: &[u8], filename: &str) -> Result<ParsedPac> {
                 uvs.push([u, v]);
             }
 
-            // Bone indices and weights (if stride large enough — typically at +16)
+            // Bone indices and weights (if stride large enough -- typically at +16)
             let bv = if stride >= 24 && foff + 24 <= data.len() {
                 let bi = [data[foff+16], data[foff+17], data[foff+18], data[foff+19]];
                 let bw = [

@@ -9,5 +9,5 @@ Linux counterpart: `cdfuse` (MIT).
 **Keeping in sync with cdfuse:**
 
 Core logic (`virtual_files.rs`, `tui.rs`, `SharedFs` decode/repack pipeline) is identical
-between the two crates — only the filesystem callback layer differs. Both must be updated
+between the two crates -- only the filesystem callback layer differs. Both must be updated
 together when adding features or fixing bugs.

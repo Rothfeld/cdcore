@@ -5,10 +5,10 @@
 //!   Followed by row_count descriptors in one of two formats:
 //!
 //!   Simple (5B): [row_id:u8][data_offset:u32]
-//!     — detected when first id == 0x01 AND 2 + count*5 == pabgh size
+//!     -- detected when first id == 0x01 AND 2 + count*5 == pabgh size
 //!
 //!   Hashed (8B): [row_hash:u32][data_offset:u32]
-//!     — general case
+//!     -- general case
 //!
 //! PABGB body (hashed): row regions starting with the row hash.
 
@@ -223,7 +223,7 @@ fn parse_row_fields(data: &[u8]) -> Vec<PabgbField> {
             pos += 4;
             continue;
         }
-        // Leftover bytes → blob
+        // Leftover bytes -> blob
         fields.push(PabgbField {
             offset: pos, size: remaining,
             raw: data[pos..].to_vec(),

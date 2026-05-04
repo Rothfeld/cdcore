@@ -2,21 +2,21 @@
 //!
 //! Header (no PAR magic; starts directly with PAMLOD fields):
 //!   0x00 lod_count  (u32)
-//!   0x04 geom_off   (u32) — byte offset to first LOD's geometry in the file
-//!   0x10 bbox_min   (3×f32)
-//!   0x1C bbox_max   (3×f32)
-//!   0x50 lod_entry_table — per-LOD submesh descriptors (DDS-string-anchored)
+//!   0x04 geom_off   (u32) -- byte offset to first LOD's geometry in the file
+//!   0x10 bbox_min   (3xf32)
+//!   0x1C bbox_max   (3xf32)
+//!   0x50 lod_entry_table -- per-LOD submesh descriptors (DDS-string-anchored)
 //!
 //! Per-LOD geometry table at geom_off - (lod_count+1)*12:
 //!   Three layouts are encountered in the wild (all 12 bytes per entry):
 //!
-//!   Format A/C — [start_offset, decomp_size, lz4_size] per LOD.
+//!   Format A/C -- [start_offset, decomp_size, lz4_size] per LOD.
 //!     The entry whose start_offset == geom_off is LOD 0 (may be at index 0
 //!     or index 1 with an all-zero placeholder at index 0).
 //!     lz4_size=0 means the section is stored raw.
 //!     e.g. cd_barricade_gaurd_02.pamlod (A), cd_spot_tower_10_stairs_01.pamlod (C)
 //!
-//!   Format B — [decomp_size, lz4_size, section_end_offset] per LOD.
+//!   Format B -- [decomp_size, lz4_size, section_end_offset] per LOD.
 //!     entries[0] = [0, 0, geom_off] anchors the geometry start.
 //!     For LOD k: data starts at entries[k].f3, decomp/lz4 in entries[k+1].
 //!     e.g. cd_puzzle_anamorphic_north_01.pamlod
@@ -35,7 +35,7 @@ const BBOX_MIN_OFF:  usize = 0x10;
 const BBOX_MAX_OFF:  usize = 0x1C;
 const ENTRY_TABLE:   usize = 0x50;
 
-// ── Public entry points ───────────────────────────────────────────────
+// ---- Public entry points ----------------------------------------------------------------------------------------------
 
 pub fn parse_lod0(data: &[u8], filename: &str) -> Result<ParsedMesh> {
     parse_lod(data, filename, 0)
@@ -209,7 +209,7 @@ fn parse_lod(data: &[u8], filename: &str, lod_level: usize) -> Result<ParsedMesh
     Ok(result)
 }
 
-// ── Chunk ↔ group matching ────────────────────────────────────────────
+// ---- Chunk <-> group matching ----------------------------------------------------------------------------------------
 
 /// Match each per-LOD chunk to the lod_group whose geometry size equals
 /// `len(chunk)` at some stride.  Returns indices into `groups`.
@@ -252,7 +252,7 @@ fn match_chunks_to_groups(
     matched
 }
 
-// ── LOD entry scanning ────────────────────────────────────────────────
+// ---- LOD entry scanning ------------------------------------------------------------------------------------------------
 
 /// Per-submesh descriptor recovered from the PAMLOD entry table.
 struct LodEntry {
@@ -290,7 +290,7 @@ fn scan_lod_groups(data: &[u8], geom_off: usize, lod_count: usize) -> Vec<Vec<Lo
         }
         // tex_start is the beginning of the texture name string, not the `.dds` suffix.
         // Scan backward for the start of the non-null run.
-        // nv/ni are 0x10 bytes before the string start — but we need the start.
+        // nv/ni are 0x10 bytes before the string start -- but we need the start.
         // The Python parser finds the DDS *end* (including null), so tex_start
         // = ENTRY_TABLE + m.start() where m.start() is the start of the match
         // including leading chars.  We need to find where the name starts.
@@ -351,7 +351,7 @@ fn scan_lod_groups(data: &[u8], geom_off: usize, lod_count: usize) -> Vec<Vec<Lo
     groups
 }
 
-// ── Per-LOD geometry table decoder ───────────────────────────────────
+// ---- Per-LOD geometry table decoder ----------------------------------------------------------------------
 
 /// Read and optionally decompress per-LOD geometry chunks.
 ///
@@ -389,13 +389,13 @@ fn get_lod_chunks(data: &[u8], geom_off: usize, lod_count: usize) -> Option<Vec<
         return read_end_offset_chunks(data, &entries, lod_count);
     }
 
-    // Format D — entries[k] = [lz4_size_of_prev, start_offset, decomp_size].
+    // Format D -- entries[k] = [lz4_size_of_prev, start_offset, decomp_size].
     // entries[0].f2 == geom_off; LZ4 block size for LOD k is entries[k+1].f1.
     // e.g. cd_aka_house_module_b_roof_0002.pamlod
     if entries[0].1 as usize == geom_off {
         let has_data = (0..lod_count).any(|k| entries[k].2 > 0);
         if !has_data { return None; }
-        // For all-raw Format D, validate decomp sum ≈ geom_size to avoid
+        // For all-raw Format D, validate decomp sum ~ geom_size to avoid
         // false positives.  Compressed tables have all_decomp >> geom_size,
         // so skip this check when any LZ4 entry is present.
         let has_lz4 = (0..lod_count).any(|k| entries[k + 1].0 > 0);

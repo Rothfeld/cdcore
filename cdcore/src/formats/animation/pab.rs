@@ -3,14 +3,14 @@
 //! Header (verified 2026-04-29):
 //!   [0x00] magic        "PAR "
 //!   [0x04] version      u32
-//!   [0x14] bone_count   u16 LE  (NOT u8 — skeletons with > 255 bones silently
+//!   [0x14] bone_count   u16 LE  (NOT u8 -- skeletons with > 255 bones silently
 //!                                truncated to their low byte with the old read)
 //!   [0x16] padding      1 byte
 //!   [0x17] bone records start
 //!
 //! Per-bone record (305 + name_len bytes):
 //!   [3B]   hash low24
-//!   [1B]   name_length (u8, length-prefix — NOT null-terminated)
+//!   [1B]   name_length (u8, length-prefix -- NOT null-terminated)
 //!   [N B]  name (no terminator)
 //!   [4B]   parent_index (i32 LE; -1 = root)
 //!   [64B]  bind_matrix        (4x4 f32)

@@ -1,7 +1,7 @@
-//! Bob Jenkins Lookup3 — two variants used by Crimson Desert.
+//! Bob Jenkins Lookup3 -- two variants used by Crimson Desert.
 //!
-//! `pa_checksum` — Pearl Abyss custom variant used for PAMT/PAPGT CRCs.
-//! `hashlittle`  — standard lookup3 used for ChaCha20 key derivation.
+//! `pa_checksum` -- Pearl Abyss custom variant used for PAMT/PAPGT CRCs.
+//! `hashlittle`  -- standard lookup3 used for ChaCha20 key derivation.
 
 const PA_MAGIC: u32 = 0x2145E233;
 
@@ -48,7 +48,7 @@ pub fn pa_checksum(data: &[u8]) -> u32 {
     pa_final(a, b, c)
 }
 
-/// Standard Bob Jenkins lookup3 `hashlittle` — returns the primary hash `c`.
+/// Standard Bob Jenkins lookup3 `hashlittle` -- returns the primary hash `c`.
 ///
 /// Used for deriving ChaCha20 encryption keys from filenames.
 pub fn hashlittle(data: &[u8], initval: u32) -> u32 {

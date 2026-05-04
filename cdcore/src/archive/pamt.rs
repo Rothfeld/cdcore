@@ -4,11 +4,11 @@
 //!   [0:4]   self_crc (PaChecksum over data[12..])
 //!   [4:8]   paz_count
 //!   [8:12]  hash + zero
-//!   PAZ table: paz_count × {crc:u32, size:u32} with 4-byte separator between
+//!   PAZ table: paz_count x {crc:u32, size:u32} with 4-byte separator between
 //!              entries (not after the last one)
 //!   Folder section: [size:u32] + entries {parent:u32, name_len:u8, name:UTF-8}
 //!   Node section:   [size:u32] + entries {parent:u32, name_len:u8, name:UTF-8}
-//!   After nodes:    [folder_count:u32][hash:u32][folder_count×16 bytes]
+//!   After nodes:    [folder_count:u32][hash:u32][folder_countx16 bytes]
 //!   File records:   {node_ref:u32, offset:u32, comp_size:u32, orig_size:u32, flags:u32}
 //!
 //! paz_index = flags & 0xFF

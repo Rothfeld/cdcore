@@ -43,7 +43,7 @@ pub fn derive_key_iv(filename: &str) -> ([u8; 32], [u8; 16]) {
     (key, iv)
 }
 
-/// ChaCha20 encrypt or decrypt (symmetric — same operation both ways).
+/// ChaCha20 encrypt or decrypt (symmetric -- same operation both ways).
 ///
 /// `iv` is 16 bytes: `[counter:u32 LE][nonce:12 bytes]`, matching the
 /// Python `cryptography` library's ChaCha20 nonce format.
@@ -74,7 +74,7 @@ pub fn decrypt(data: &[u8], filename: &str) -> Vec<u8> {
     out
 }
 
-/// Encrypt to a new Vec (identical to decrypt — ChaCha20 is symmetric).
+/// Encrypt to a new Vec (identical to decrypt -- ChaCha20 is symmetric).
 pub fn encrypt(data: &[u8], filename: &str) -> Vec<u8> {
     decrypt(data, filename)
 }

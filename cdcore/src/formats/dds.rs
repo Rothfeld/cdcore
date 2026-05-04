@@ -34,7 +34,7 @@ enum DdsFormat {
     Bc6h,
     Bc7,
     Bgra32,
-    Rgba32,         // R8G8B8A8 — no channel swizzle needed
+    Rgba32,         // R8G8B8A8 -- no channel swizzle needed
     Rgb24,
     R8,             // single channel grayscale
     R10G10B10A2,    // packed 10/10/10/2 bits
@@ -555,7 +555,7 @@ fn decode_luminance16(src: &[u8], width: u32, height: u32) -> Vec<u8> {
 }
 
 fn decode_rgba32(src: &[u8], width: u32, height: u32) -> Vec<u8> {
-    // R8G8B8A8 — already in RGBA order, copy directly.
+    // R8G8B8A8 -- already in RGBA order, copy directly.
     let n = (width * height * 4) as usize;
     src[..src.len().min(n)].to_vec()
 }

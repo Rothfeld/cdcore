@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 /// Try to locate the Crimson Desert packages directory.
 pub fn detect_game_dir() -> Option<PathBuf> {
-    // 1. /cd — devcontainer mount
+    // 1. /cd -- devcontainer mount
     let cd = PathBuf::from("/cd");
     if is_packages_dir(&cd) { return Some(cd); }
 

@@ -52,7 +52,7 @@ const FILE_ATTRIBUTE_ARCHIVE:   u32 = 0x20;
 
 const FSP_CLEANUP_DELETE: u32 = 0x01;
 
-// NTSTATUS codes (raw i32 — avoids pulling windows crate into this file)
+// NTSTATUS codes (raw i32 -- avoids pulling windows crate into this file)
 const NTSTATUS_NOT_FOUND:  i32 = 0xC0000034u32 as i32; // STATUS_OBJECT_NAME_NOT_FOUND
 const NTSTATUS_WRITE_PROT: i32 = 0xC00000A2u32 as i32; // STATUS_MEDIA_WRITE_PROTECTED
 const NTSTATUS_INSUF_RES:  i32 = 0xC000009Au32 as i32; // STATUS_INSUFFICIENT_RESOURCES
@@ -116,7 +116,7 @@ pub struct SharedFs {
     cached_bytes:  AtomicUsize,
     in_flight:     Mutex<HashMap<u64, Arc<OnceLock<Option<Arc<[u8]>>>>>>,
     paz_maps:      Mutex<HashMap<String, Arc<Mmap>>>,
-    // keyed by VFS path string (not ino — no session-thread path map here)
+    // keyed by VFS path string (not ino -- no session-thread path map here)
     write_overlay: Mutex<HashMap<String, Vec<u8>>>,
     write_mtimes:  Mutex<HashMap<String, SystemTime>>,
     pending_paths: Mutex<HashSet<String>>,
@@ -563,7 +563,7 @@ impl SharedFs {
     }
 }
 
-// ---- CdWinFs — thin wrapper, implements FileSystemContext -------------------
+// ---- CdWinFs -- thin wrapper, implements FileSystemContext -------------------
 
 pub struct CdWinFs(Arc<SharedFs>);
 

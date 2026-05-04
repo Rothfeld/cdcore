@@ -1,11 +1,11 @@
-//! Item 7 — Flat BTreeMap index replacing the HashMap trie.
+//! Item 7 -- Flat BTreeMap index replacing the HashMap trie.
 //!
 //! All file entries live in a single `BTreeMap<String, (PamtFileEntry, String)>`
 //! sorted by virtual path. This gives:
-//!   • lookup:       O(log n) binary search vs O(depth) pointer-chased HashMap
-//!   • list_dir:     O(k log n) range scan — one contiguous memory region
-//!   • memory:       ~300 MB less than the recursive HashMap tree for 1.4 M files
-//!   • parallelism:  PAMT parsing is fully parallel; one batch write lock at merge
+//!   * lookup:       O(log n) binary search vs O(depth) pointer-chased HashMap
+//!   * list_dir:     O(k log n) range scan -- one contiguous memory region
+//!   * memory:       ~300 MB less than the recursive HashMap tree for 1.4 M files
+//!   * parallelism:  PAMT parsing is fully parallel; one batch write lock at merge
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -137,7 +137,7 @@ impl VfsManager {
         self.list_dir_typed(dir).into_iter().map(|(n, _)| n).collect()
     }
 
-    /// Direct children of `dir` with `is_dir` flag — O(k log n) range scan.
+    /// Direct children of `dir` with `is_dir` flag -- O(k log n) range scan.
     pub fn list_dir_typed(&self, dir: &str) -> Vec<(String, bool)> {
         self.list_dir_with_sizes(dir)
             .into_iter()
@@ -147,8 +147,8 @@ impl VfsManager {
 
     /// Direct children of `dir` with `(name, is_dir, orig_size)`.
     ///
-    /// Single BTreeMap read lock, single range scan — use this in
-    /// `build_dir_cache` instead of calling `list_dir_typed` + N×`lookup`.
+    /// Single BTreeMap read lock, single range scan -- use this in
+    /// `build_dir_cache` instead of calling `list_dir_typed` + Nx`lookup`.
     pub fn list_dir_with_sizes(&self, dir: &str) -> Vec<(String, bool, u32)> {
         let tree = self.tree.read().unwrap();
         let prefix = if dir.is_empty() {
@@ -157,7 +157,7 @@ impl VfsManager {
             format!("{}/", dir.replace('\\', "/"))
         };
 
-        // `seen`: name → (is_dir, orig_size). For directory children, size=0.
+        // `seen`: name -> (is_dir, orig_size). For directory children, size=0.
         let mut seen: std::collections::HashMap<String, (bool, u32)> =
             std::collections::HashMap::new();
 
@@ -181,7 +181,7 @@ impl VfsManager {
         result
     }
 
-    /// Like `list_dir_with_sizes` but skips the sort — for FUSE readdirplus
+    /// Like `list_dir_with_sizes` but skips the sort -- for FUSE readdirplus
     /// where kernel ordering doesn't matter and 329K-entry sorts add ~7% CPU.
     pub fn list_dir_with_sizes_unsorted(&self, dir: &str) -> Vec<(String, bool, u32)> {
         let tree = self.tree.read().unwrap();
@@ -205,7 +205,7 @@ impl VfsManager {
     }
 
     /// Returns `true` if `path` is a non-empty directory in the VFS.
-    /// O(log n) — seeks to the first entry under the prefix, checks one node.
+    /// O(log n) -- seeks to the first entry under the prefix, checks one node.
     pub fn dir_exists(&self, path: &str) -> bool {
         let prefix = format!("{}/", path.replace('\\', "/"));
         let tree = self.tree.read().unwrap();
@@ -324,7 +324,7 @@ impl VfsManager {
     /// entries `dir@group/rest/of/path` alongside the default `dir/rest/of/path`
     /// so callers can request a specific language/variant explicitly.
     ///
-    /// Example: `sound/` appears in groups 0005, 0006, 0035 →
+    /// Example: `sound/` appears in groups 0005, 0006, 0035 ->
     ///   `sound@0005/nhm_adult_noble_1_hello.wem` (Korean)
     ///   `sound@0006/nhm_adult_noble_1_hello.wem` (English)
     ///   `sound@0035/nhm_adult_noble_1_hello.wem` (Japanese)

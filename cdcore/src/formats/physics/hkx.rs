@@ -3,7 +3,7 @@
 //! Every section is an 8-byte header followed by its body:
 //!   [0:4] u32 BE: top 4 bits = flags, low 28 bits = total section size
 //!                 (size includes this 8-byte header)
-//!                 flag 0x4 (bit 30) = leaf — body is raw bytes, no children
+//!                 flag 0x4 (bit 30) = leaf -- body is raw bytes, no children
 //!   [4:8] char[4] ASCII tag (e.g. "TAG0", "SDKV", "DATA", "TYPE")
 //!
 //! Root section is always TAG0. Child sections follow immediately inside it.
@@ -100,7 +100,7 @@ fn parse_children(
                 extract_strings(&data[off + HEADER_SIZE..section_end], result);
             }
             "TYPE" | "INDX" => {
-                // Container — recurse into children
+                // Container -- recurse into children
                 parse_children(data, off + HEADER_SIZE, section_end, depth + 1, result);
             }
             _ => {}

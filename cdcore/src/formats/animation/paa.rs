@@ -1,8 +1,8 @@
 //! PAA skeletal animation parser.
 //!
 //! Three variants:
-//!   0x00 — gimmick/object poses, 1-2 keyframes
-//!   0xC0 — full character animation, two sub-formats:
+//!   0x00 -- gimmick/object poses, 1-2 keyframes
+//!   0xC0 -- full character animation, two sub-formats:
 //!     a) sparse keyframe stream (i16 axis_x/y/z + f16 w + u16 frame_idx)
 //!     b) link-variant with embedded per-bone tracks (4 x fp16 quat + u16 frame_idx)
 //!
@@ -10,8 +10,8 @@
 //!   0x00 magic   "PAR " (4B)
 //!   0x04 version 0x02030001 (4B)
 //!   0x08 sentinel 02..09 (8B)
-//!   0x10 flags   (u32 LE) — upper byte is variant selector
-//!   0x14 str_len (u16 LE) — metadata tag length
+//!   0x10 flags   (u32 LE) -- upper byte is variant selector
+//!   0x14 str_len (u16 LE) -- metadata tag length
 //!   0x16 metadata tags (UTF-8)
 //!
 //! Embedded-tracks keyframe record (10 bytes):
@@ -46,7 +46,7 @@ pub struct ParsedAnimation {
     pub bone_count: u32,
     pub fps: f32,
     pub metadata_tags: String,
-    /// Dense keyframes[frame_idx][bone_idx] — gaps filled by repeat.
+    /// Dense keyframes[frame_idx][bone_idx] -- gaps filled by repeat.
     pub keyframes: Vec<Vec<Keyframe>>,
     /// Bind pose SRT (if present).
     pub bind_poses: Vec<Keyframe>,
@@ -86,7 +86,7 @@ pub fn parse(data: &[u8], filename: &str) -> Result<ParsedAnimation> {
 }
 
 // ---------------------------------------------------------------------------
-// 0xC0 body — tries embedded-tracks then falls back to sparse stream
+// 0xC0 body -- tries embedded-tracks then falls back to sparse stream
 // ---------------------------------------------------------------------------
 
 fn parse_c0_body(
@@ -194,7 +194,7 @@ fn decode_embedded_tracks(data: &[u8], tracks_start: usize)
         let r2 = looks_like_keyframe(data, p + 10)?;
         if r1.1 > 4 || r2.1 <= r1.1 || r2.1 > r1.1 + 8 {
             // Not a valid track start; advance one byte and retry
-            // — but only if we haven't started any tracks yet
+            // -- but only if we haven't started any tracks yet
             if tracks.is_empty() {
                 p += 1;
                 continue;
@@ -202,7 +202,7 @@ fn decode_embedded_tracks(data: &[u8], tracks_start: usize)
             break;
         }
 
-        // Valid track — walk forward
+        // Valid track -- walk forward
         let mut kfs = vec![(r1.0, r1.1), (r2.0, r2.1)];
         let mut last_frame = r2.1;
         let mut q = p + 20;

@@ -64,7 +64,7 @@ fn main() {
         print!("{out}");
         return;
     }
-    // Always log to /tmp/cdfuse.log — keeps both the TUI and daemon mode clean.
+    // Always log to /tmp/cdfuse.log -- keeps both the TUI and daemon mode clean.
     let f = std::fs::File::create("/tmp/cdfuse.log")
         .expect("cannot open /tmp/cdfuse.log");
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -80,7 +80,7 @@ fn main() {
         std::process::exit(if status.success() { 0 } else { 1 });
     }
 
-    // Resolve game_dir + mount: CLI args → saved config → interactive TUI.
+    // Resolve game_dir + mount: CLI args -> saved config -> interactive TUI.
     let (game_dir, mount) = match (args.game_dir.as_deref(), args.mount.as_deref()) {
         (Some(gd), Some(m)) => {
             let cfg = config::Config { game_dir: gd.to_string(), mount: m.to_string() };

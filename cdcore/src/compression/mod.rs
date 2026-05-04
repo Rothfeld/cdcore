@@ -28,7 +28,7 @@ pub fn compress_lz4(data: &[u8]) -> Vec<u8> {
     lz4::compress(data)
 }
 
-/// Type-1 dispatcher — tries each strategy in order, falls back to raw.
+/// Type-1 dispatcher -- tries each strategy in order, falls back to raw.
 fn decompress_type1(data: &[u8], orig_size: usize) -> Result<Vec<u8>> {
     // Strategy 1: PAR container (starts with "PAR ", per-section LZ4)
     if data.len() >= 4 && &data[..4] == b"PAR " {

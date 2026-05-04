@@ -6,7 +6,7 @@ Usage:
 """
 import json, subprocess, sys, pathlib
 
-# Crates that are part of this project — exclude from third-party list.
+# Crates that are part of this project -- exclude from third-party list.
 OWN_CRATES = {"cdcore", "cdfuse", "cdwinfs", "ddsthumb"}
 
 # Standard SPDX license texts for crates that omit a LICENSE file.

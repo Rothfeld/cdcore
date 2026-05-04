@@ -2,15 +2,15 @@
 //!
 //! Header offsets:
 //!   0x10 mesh_count (u32)
-//!   0x14 bbox_min   (3×f32)
-//!   0x20 bbox_max   (3×f32)
+//!   0x14 bbox_min   (3xf32)
+//!   0x20 bbox_max   (3xf32)
 //!   0x3C geom_off   (u32)
 //!
 //! Submesh table starts at 0x410, stride 0x218 per entry.
 //!   +0x000 vertex_count (u32)
 //!   +0x004 index_count  (u32)
-//!   +0x008 vert_elem    (u32)  — vertex start in element units
-//!   +0x00C idx_elem     (u32)  — index start in element units
+//!   +0x008 vert_elem    (u32)  -- vertex start in element units
+//!   +0x00C idx_elem     (u32)  -- index start in element units
 //!   +0x010 texture      (256-byte null-padded ASCII string)
 //!   +0x110 material     (256-byte null-padded ASCII string)
 
@@ -133,7 +133,7 @@ pub fn parse(data: &[u8], filename: &str) -> Result<ParsedMesh> {
     }
 
     // Fallback: scan-based if the primary parse found no usable geometry.
-    // Compute vertex sum now — result.total_vertices is not set yet.
+    // Compute vertex sum now -- result.total_vertices is not set yet.
     let primary_verts: usize = result.submeshes.iter().map(|s| s.vertices.len()).sum();
     if primary_verts == 0 {
         result.submeshes.clear();
@@ -151,7 +151,7 @@ pub fn parse(data: &[u8], filename: &str) -> Result<ParsedMesh> {
     Ok(result)
 }
 
-// ── Internal helpers ──────────────────────────────────────────────────
+// ---- Internal helpers ----------------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct RawEntry {

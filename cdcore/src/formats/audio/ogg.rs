@@ -13,7 +13,7 @@ use super::{Result, WemError};
 use super::wem::{PacketHeaderFormat, Wem};
 
 // ---------------------------------------------------------------------------
-// Bit I/O — LSB-first reader/writer for Vorbis packet parsing
+// Bit I/O -- LSB-first reader/writer for Vorbis packet parsing
 // ---------------------------------------------------------------------------
 
 pub struct BitReader<'a> {
@@ -71,7 +71,7 @@ impl BitWriter {
 }
 
 // ---------------------------------------------------------------------------
-// Packed codebook library — hash LUT for setup stripping
+// Packed codebook library -- hash LUT for setup stripping
 // (sourced from ww2ogg 0.1.0, BSD-3-Clause)
 // ---------------------------------------------------------------------------
 
@@ -190,7 +190,7 @@ fn expand_packed_codebook(packed: &[u8]) -> std::result::Result<Vec<u8>, String>
 }
 
 // ---------------------------------------------------------------------------
-// Vorbis setup header stripping (expanded OGG → Wwise stripped)
+// Vorbis setup header stripping (expanded OGG -> Wwise stripped)
 // ---------------------------------------------------------------------------
 
 pub fn strip_setup_header(packet: &[u8], channels: usize, lut: &CodebookLut) -> Result<Vec<u8>> {
@@ -569,7 +569,7 @@ fn build_vorbis_comment_packet(vendor: &str, comments: &[&str]) -> Vec<u8> {
         out.extend_from_slice(&(cb.len() as u32).to_le_bytes());
         out.extend_from_slice(cb);
     }
-    out.push(0x01); // Vorbis spec §5.2 framing bit
+    out.push(0x01); // Vorbis spec S5.2 framing bit
     out
 }
 
