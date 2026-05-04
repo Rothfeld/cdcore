@@ -20,8 +20,7 @@
 //!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
 use log::warn;
-use cdcore::formats::dds::decode_dds_to_rgba;
-use image_dds::{dds_from_image, dds_image_format, Mipmaps, Quality};
+use cdcore::formats::dds::{decode_dds_to_rgba, encode_dds_matching};
 use cdcore::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
 use cdcore::formats::scene::parse_prefab;
 use cdcore::formats::animation::parse_paa_metabin;
@@ -286,27 +285,31 @@ pub fn render_dds_png(data: &[u8], path: &str) -> Option<Vec<u8>> {
 /// RGBA, then re-encodes using image-dds so the output has the same pixel
 /// format (BC7, BC1, RGBA8, etc.) as the source file.
 pub fn parse_png_to_dds(png_data: &[u8], original_dds_data: &[u8], path: &str) -> Option<Vec<u8>> {
-    // Decode PNG to RgbaImage (image_dds expects this type).
-    let img = image_dds::image::load_from_memory_with_format(
-            png_data, image_dds::image::ImageFormat::Png)
-        .map_err(|e| warn!("parse_png_to_dds {path}: PNG decode: {e}")).ok()?
-        .into_rgba8();
-
-    // Extract the target format from the original DDS header.
-    let orig = image_dds::ddsfile::Dds::read(&mut std::io::Cursor::new(original_dds_data))
-        .map_err(|e| warn!("parse_png_to_dds {path}: original DDS parse: {e}")).ok()?;
-    let fmt = dds_image_format(&orig)
-        .map_err(|e| warn!("parse_png_to_dds {path}: get format: {e:?}")).ok()?;
-
-    // Re-encode. GeneratedAutomatic matches the mip chain games expect.
-    // Arg order: (image, format, quality, mipmaps)
-    let dds = dds_from_image(&img, fmt, Quality::Normal, Mipmaps::GeneratedAutomatic)
-        .map_err(|e| warn!("parse_png_to_dds {path}: encode ({fmt:?}): {e}")).ok()?;
-
-    let mut out = Vec::new();
-    dds.write(&mut out)
-        .map_err(|e| warn!("parse_png_to_dds {path}: write DDS: {e}")).ok()?;
-    Some(out)
+    let decoder = png::Decoder::new(png_data);
+    let mut reader = decoder.read_info()
+        .map_err(|e| warn!("parse_png_to_dds {path}: PNG read_info: {e}")).ok()?;
+    let mut rgba = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut rgba)
+        .map_err(|e| warn!("parse_png_to_dds {path}: PNG decode: {e}")).ok()?;
+    let (w, h) = (info.width, info.height);
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => rgba[..info.buffer_size()].to_vec(),
+        png::ColorType::Rgb  => {
+            let src = &rgba[..info.buffer_size()];
+            let mut out = vec![0u8; (w * h * 4) as usize];
+            for (i, px) in src.chunks_exact(3).enumerate() {
+                out[i*4..i*4+3].copy_from_slice(px);
+                out[i*4+3] = 255;
+            }
+            out
+        }
+        _ => {
+            warn!("parse_png_to_dds {path}: unsupported PNG color type {:?}", info.color_type);
+            return None;
+        }
+    };
+    encode_dds_matching(&rgba, w, h, original_dds_data)
+        .map_err(|e| warn!("parse_png_to_dds {path}: encode: {e}")).ok()
 }
 
 // -- Mesh → FBX renderers -------------------------------------------------------

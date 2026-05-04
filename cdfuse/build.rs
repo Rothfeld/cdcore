@@ -4,7 +4,6 @@ use std::io::Write;
 
 fn main() {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    // cdwinfs has its own THIRD_PARTY_LICENSES.md (includes winfsp deps).
     let src = std::path::Path::new(&manifest).join("THIRD_PARTY_LICENSES.md");
     let out = std::path::Path::new(&std::env::var("OUT_DIR").unwrap())
         .join("licenses.deflate");

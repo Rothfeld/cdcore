@@ -39,10 +39,27 @@ struct Args {
     /// Comma-separated list of specific groups to load (e.g. 0000,0001)
     #[arg(long, value_delimiter = ',')]
     groups: Vec<String>,
+
+    /// Print third-party dependency licenses and exit.
+    #[arg(long, exclusive = true)]
+    licenses: bool,
 }
+
+const THIRD_PARTY_LICENSES_DEFLATE: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/licenses.deflate"));
 
 fn main() {
     let args = Args::parse();
+
+    if args.licenses {
+        use std::io::Read;
+        let mut out = String::new();
+        flate2::read::DeflateDecoder::new(THIRD_PARTY_LICENSES_DEFLATE)
+            .read_to_string(&mut out)
+            .expect("decompress licenses");
+        print!("{out}");
+        return;
+    }
 
     // Log to file so the TUI can own the console.
     let f = std::fs::File::create("cdwinfs.log")

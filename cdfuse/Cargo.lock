@@ -151,6 +151,7 @@ dependencies = [
  "cdcore",
  "clap",
  "env_logger",
+ "flate2",
  "fuser",
  "libc",
  "log",

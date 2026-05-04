@@ -2,7 +2,7 @@
 name = "cdwinfs"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0"
 repository = "https://github.com/Rothfeld/cdcore"
 
 [[bin]]
@@ -19,11 +19,12 @@ memmap2   = "0.9"                                          # memory-mapped PAZ f
 winfsp    = { version = "0.12", features = ["delayload"] }  # WinFSP bindings; 'system' removed so winfsp-sys uses its bundled headers at build time
 ratatui   = "0.29"                                         # TUI framework (re-exports crossterm)
 png       = "0.17"                                         # PNG encoder for .dds.png/ virtual view
-image_dds = "0.5"                                          # DDS re-encoder for .dds.png/ write-back
+flate2    = "1.0"                                          # decompress embedded license text at runtime
 
 [build-dependencies]
 winfsp  = { version = "0.12", features = ["build"] }       # emits /DELAYLOAD linker flag for winfsp-x64.dll
 winres  = "0.1"                                             # embeds VERSIONINFO resource and application manifest
+flate2  = "1.0"                                             # compress THIRD_PARTY_LICENSES.md at build time
 
 [profile.release]
 opt-level = 3

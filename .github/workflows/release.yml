@@ -121,4 +121,6 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*   # glob matches every file in every artifact dir
+          # License compliance is satisfied by the --licenses flag embedded in each
+          # binary (include_str! of THIRD_PARTY_LICENSES.md at build time).
+          files: artifacts/**/*
