@@ -1,21 +1,13 @@
 ## cdwinfs
 
-Windows counterpart of `cdfuse`. Both implement the same filesystem — transparent
-read/write access to Crimson Desert PAZ archives via a mounted directory tree,
-with virtual JSONL/PNG views over binary formats and TUI-driven write-back.
+Windows WinFSP filesystem mount for Crimson Desert archives. See `../README.md` for full
+usage, build instructions, and runtime requirements.
 
-**Platform split:**
+Depends on `cdcore`. Licensed GPL-3.0 (inherited from `winfsp-rs` bindings).
+Linux counterpart: `cdfuse` (MIT).
 
-| Crate | Platform | Driver |
-|-------|----------|--------|
-| `cdfuse` | Linux | FUSE (`fuser`) |
-| `cdwinfs` | Windows | WinFsp |
+**Keeping in sync with cdfuse:**
 
-**Keeping them in sync:**
-
-The two crates are maintained in parallel by AI agents. When adding features or
-fixing bugs, both crates should be updated together. The core logic
-(`virtual_files.rs`, `tui.rs`, the decode/repack pipeline in `SharedFs`) is
-identical; only the filesystem callback layer differs.
-
-See `../README.md` for usage, build instructions, and runtime requirements.
+Core logic (`virtual_files.rs`, `tui.rs`, `SharedFs` decode/repack pipeline) is identical
+between the two crates — only the filesystem callback layer differs. Both must be updated
+together when adding features or fixing bugs.
