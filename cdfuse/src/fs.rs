@@ -197,7 +197,6 @@ impl SharedFs {
     }
 
     pub fn is_readonly(&self) -> bool { self.readonly }
-    pub fn has_vgmstream(&self) -> bool { true } // cdcore::formats::audio always available
     pub fn has_ffmpeg(&self) -> bool { self.ffmpeg.is_some() }
 
     pub fn push_event(&self, msg: String) {

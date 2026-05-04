@@ -417,7 +417,7 @@ fn event_loop(
         let events    = shared.recent_events();
         let is_saving = saving.load(Ordering::Relaxed);
         term.draw(|f| draw(f, mount, shared.is_readonly(),
-                           shared.has_vgmstream(), shared.has_ffmpeg(),
+                           shared.has_ffmpeg(),
                            &pending, &events, is_saving)).ok();
 
         if event::poll(Duration::from_millis(250)).unwrap_or(false) {
@@ -449,7 +449,6 @@ fn draw(
     f: &mut ratatui::Frame,
     mount: &str,
     readonly: bool,
-    has_vgmstream: bool,
     has_ffmpeg: bool,
     pending: &[String],
     events: &[String],
@@ -482,8 +481,7 @@ fn draw(
         Span::styled(mount, Style::default().fg(Color::Cyan)),
         Span::styled(rw_label, rw_style),
         Span::raw("  "),
-        Span::styled("cdcore::formats::audio",
-            Style::default().fg(if has_vgmstream { Color::Green } else { Color::Red })),
+        Span::styled("cdcore::formats::audio", Style::default().fg(Color::Green)),
         Span::raw(" "),
         Span::styled("ffmpeg",
             Style::default().fg(if has_ffmpeg { Color::Green } else { Color::Red })),
