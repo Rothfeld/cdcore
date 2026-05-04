@@ -33,7 +33,7 @@ cd cdcore
 <details>
 <summary>Architecture diagram</summary>
 
-![architecture](diagram.svg "boy, now that i made a diagram it sure looks a lot more professional than it felt building it")
+![architecture](.assets/diagram.svg "boy, now that i made a diagram it sure looks a lot more professional than it felt building it")
 
 </details>
 
