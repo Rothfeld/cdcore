@@ -10,7 +10,7 @@ name = "cdwinfs"
 
 [dependencies]
 cdcore    = { path = "../cdcore" }                         # VFS, parsers, crypto, compression
-wmmogg    = { path = "../wmmogg" }                         # WEM ↔ OGG conversion (replaces vgmstream)
+wemcodec  = { path = "../wemcodec" }                         # WEM ↔ OGG conversion (replaces vgmstream)
 clap      = { version = "4", features = ["derive"] }      # CLI argument parsing
 log       = "0.4"                                          # logging facade
 env_logger = "0.11"                                        # RUST_LOG env-var log backend

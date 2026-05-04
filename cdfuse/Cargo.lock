@@ -194,7 +194,7 @@ dependencies = [
  "png",
  "ratatui",
  "rayon",
- "wmmogg",
+ "wemcodec",
 ]
 
 [[package]]
@@ -1503,6 +1503,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
+name = "wemcodec"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "log",
+ "sha2",
+ "thiserror 2.0.18",
+ "ww2ogg",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1611,17 +1622,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "wmmogg"
-version = "0.1.0"
-dependencies = [
- "byteorder",
- "log",
- "sha2",
- "thiserror 2.0.18",
- "ww2ogg",
-]
 
 [[package]]
 name = "ww2ogg"

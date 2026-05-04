@@ -63,7 +63,7 @@ pub fn build_roundtrip_comment(wem: &Wem, wem_bytes: &[u8]) -> Vec<u8> {
         setup_hex  = hex_encode(setup_packet_with_header),
     );
 
-    build_vorbis_comment_packet("wmmogg", &[tag.as_str()])
+    build_vorbis_comment_packet("wemcodec", &[tag.as_str()])
 }
 
 /// Find the byte offset of the data chunk's content (after the 8-byte id+size header).

@@ -1,6 +1,6 @@
 /// OGG → WEM reverse conversion.
 ///
-/// Requires the OGG to have been produced by wmmogg's forward path
+/// Requires the OGG to have been produced by wemcodec's forward path
 /// (i.e. contain a WEM_ROUNDTRIP_V1 Vorbis comment).
 
 mod bit_io;
@@ -34,7 +34,7 @@ pub fn ogg_to_wem(ogg_bytes: &[u8]) -> Result<Vec<u8>> {
 
     let meta = parse_roundtrip_comment(&packets[1])
         .ok_or_else(|| WmmoggError::OggParse(
-            "WEM_ROUNDTRIP_V1 comment not found — ogg was not produced by wmmogg forward path".into()
+            "WEM_ROUNDTRIP_V1 comment not found — ogg was not produced by wemcodec forward path".into()
         ))?;
 
     log::debug!("roundtrip meta: {meta:?}");
