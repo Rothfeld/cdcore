@@ -5,11 +5,6 @@ use std::path::{Path, PathBuf};
 
 // -- Optional tool detection --------------------------------------------------
 
-/// Find vgmstream-cli in PATH or the CrimsonForge managed tools directory.
-pub fn detect_vgmstream() -> Option<PathBuf> {
-    find_tool(&["vgmstream-cli.exe", "vgmstream-cli"])
-}
-
 /// Find ffmpeg in PATH or the CrimsonForge managed tools directory.
 pub fn detect_ffmpeg() -> Option<PathBuf> {
     find_tool(&["ffmpeg.exe", "ffmpeg"])

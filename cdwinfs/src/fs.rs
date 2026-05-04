@@ -125,13 +125,12 @@ pub struct SharedFs {
     readonly:       bool,
     auto_repack:    bool,
     recent_events:  Mutex<VecDeque<String>>,
-    pub vgmstream:  Option<std::path::PathBuf>,
-    pub ffmpeg:     Option<std::path::PathBuf>,
+    pub ffmpeg: Option<std::path::PathBuf>,
 }
 
 impl SharedFs {
     fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool,
-                 vgmstream: Option<std::path::PathBuf>, ffmpeg: Option<std::path::PathBuf>) -> Self {
+                 ffmpeg: Option<std::path::PathBuf>) -> Self {
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
         let repack_engine = RepackEngine::new(&packages_path, None);
@@ -149,13 +148,12 @@ impl SharedFs {
             readonly,
             auto_repack,
             recent_events: Mutex::new(VecDeque::new()),
-            vgmstream,
             ffmpeg,
         }
     }
 
     pub fn is_readonly(&self) -> bool { self.readonly }
-    pub fn has_vgmstream(&self) -> bool { self.vgmstream.is_some() }
+    pub fn has_vgmstream(&self) -> bool { true } // wmmogg always available
     pub fn has_ffmpeg(&self) -> bool { self.ffmpeg.is_some() }
 
     pub fn push_event(&self, msg: String) {
@@ -341,8 +339,7 @@ impl SharedFs {
                     virtual_files::render_pac_fbx(&src_data, &vf.source_path)?
                 }
                 virtual_files::VirtualKind::WemOgg => {
-                    let vgm = self.vgmstream.as_deref()?;
-                    virtual_files::render_wem_ogg(&src_data, &vf.source_path, vgm)?
+                    virtual_files::render_wem_ogg(&src_data, &vf.source_path)?
                 }
             };
             return Some(Arc::from(bytes));
@@ -499,7 +496,7 @@ impl SharedFs {
         // Virtual root directories appear only at the filesystem root.
         if path.is_empty() {
             for vdir_name in virtual_files::virtual_root_dirs() {
-                if virtual_files::root_requires_vgmstream(vdir_name) && self.vgmstream.is_none() {
+                if virtual_files::root_requires_vgmstream(vdir_name) {
                     continue;
                 }
                 add!(vdir_name, self.dir_info(vdir_name));
@@ -577,8 +574,8 @@ pub struct CdWinFs(Arc<SharedFs>);
 
 impl CdWinFs {
     pub fn new(vfs: VfsManager, readonly: bool, auto_repack: bool,
-               vgmstream: Option<std::path::PathBuf>, ffmpeg: Option<std::path::PathBuf>) -> Self {
-        CdWinFs(Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack, vgmstream, ffmpeg)))
+               ffmpeg: Option<std::path::PathBuf>) -> Self {
+        CdWinFs(Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack, ffmpeg)))
     }
 
     pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.0) }

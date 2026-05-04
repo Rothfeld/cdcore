@@ -118,9 +118,8 @@ fn main() {
         }
     }
 
-    let vgmstream = setup::detect_vgmstream();
-    let ffmpeg    = setup::detect_ffmpeg();
-    let fs     = fs::CdFs::new(vfs, args.readonly, !args.no_auto_repack, vgmstream, ffmpeg);
+    let ffmpeg = setup::detect_ffmpeg();
+    let fs = fs::CdFs::new(vfs, args.readonly, !args.no_auto_repack, ffmpeg);
     let shared = fs.shared();
 
     let mut options = vec![

@@ -1,0 +1,20 @@
+[package]
+name = "wmmogg"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+ww2ogg   = "0.1"                 # wem->ogg forward conversion
+byteorder = "1.5"                # riff/rifx multi-byte field encoding
+thiserror = "2"                  # error derive
+log       = "0.4"                # logging facade
+sha2      = "0.11"               # codebook hash LUT for setup stripping (pure Rust)
+
+[dev-dependencies]
+env_logger = "0.11"
+ww2ogg    = "0.1"                  # validate() in decode test
+
+[[test]]
+name = "roundtrip"
+path = "tests/roundtrip.rs"
