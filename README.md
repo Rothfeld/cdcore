@@ -13,34 +13,30 @@ build.cmd       # Windows
 pip install --force-reinstall cdcore/target/wheels/*.whl
 ```
 
-These crates are unaffiliated companion tooling for the excellent
-[CrimsonForge](https://github.com/hzeemr/crimsonforge) modding studio.
-The archive formats, crypto, compression, mesh parsers, FBX export logic,
-and virtual file designs are all derived directly from CrimsonForge's Python
-implementation.
+Companion tooling for the excellent [CrimsonForge](https://github.com/hzeemr/crimsonforge).
+Archive formats, crypto, compression, mesh parsers, FBX export logic,
+and virtual file designs derived from CrimsonForge's Python implementation.
 
 ---
 
 ### `cdcore`
 
-Rust library exposed to Python via [PyO3](https://pyo3.rs).
-Used as a faster VFS and decoder backend for CrimsonForge. Add one line at
-the top of `main.py` to activate:
+Rust library for Python via [PyO3](https://pyo3.rs).
+Drop-in faster backend for CrimsonForge's VFS, DDS reader, and mesh parser:
 
 ```python
 import cdcore  # monkeypatches vfs, dds reader and mesh reader with native implementations
 ```
 
-The import injects three transparent proxies into `sys.modules`:
+Injects 3 proxies into `sys.modules`:
 
 - `core.vfs_manager.VfsManager` → Rust VFS (PAPGT + PAMT + PAZ, parallel load, LRU cache)
 - `core.dds_reader.decode_dds_to_rgba` → Rust DDS decoder (BC1-BC7, BC6H, float variants)
 - `core.mesh_parser.parse_pam` / `parse_pamlod` → Rust mesh parsers (30–70× faster)
 
-All other attributes on those modules fall through to the original Python
-implementations, so cdcore can be adopted incrementally with no other code changes.
+Other attributes fall through to Python. No other code changes needed.
 
-The wheel also exposes the underlying Rust API directly for use outside CrimsonForge:
+Also exposes Rust API directly:
 
 ```python
 import cdcore
@@ -64,12 +60,8 @@ for sub in mesh.submeshes:
 
 ### `cdfuse` (Linux) / `cdwinfs` (Windows)
 
-Filesystem that mounts Crimson Desert archives as a browsable directory tree.
-Files are transparently decrypted and decompressed on access.
-Supports read-write: edit files in place or drag-and-drop replacements.
-By default, closing a modified file immediately repacks it into the PAZ archives
-in the background. Pass `--no-auto-repack` to disable this and use `[s]` to
-flush manually instead.
+Mounts Crimson Desert archives as a filesystem. Decrypts and decompresses on access.
+Read-write: edits repack to PAZ on close. Use `--no-auto-repack` + `[s]` to flush manually.
 
 
 | Crate | Platform | Driver | License | Requirement |
@@ -153,20 +145,18 @@ modifying the archives:
 .wem.ogg/sound@0035/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg  (Japanese)
 ```
 
-`.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts it
-back to the original binary format and repacks it automatically.
+`.paloc.jsonl/` and `.dds.png/` support write-back: save converts to binary and repacks.
 
 `.wem.ogg/` is handled entirely in Rust by `cdcore::formats::audio` — no
 external tools required. OGG conversion is on-demand and lossless.
 
-When multiple packages share the same directory (Crimson Desert ships Korean,
-English, and Japanese voice in separate packages but under the same `sound/`
-path), the VFS automatically exposes `sound@0005/`, `sound@0006/`, `sound@0035/`
-alongside the default `sound/` so all language variants are accessible without
-ambiguity. This applies to any directory found in more than one package.
+Directories present in multiple packages get `name@group` aliases alongside
+the default. Crimson Desert ships three voice-over languages in separate packages
+(0005=Korean, 0006=English, 0035=Japanese) all under `sound/`, so the VFS
+exposes `sound@0005/`, `sound@0006/`, `sound@0035/`. Applies to any conflicting
+directory, not just audio.
 
-The FBX exporter is a Rust port of CrimsonForge's `mesh_exporter.py`, producing
-binary FBX 7.4 files compatible with Blender, Maya, and Unreal.
+FBX exporter: Rust port of `mesh_exporter.py`. Binary FBX 7.4, compatible with Blender, Maya, Unreal.
 
 ```bash
 # Edit German localisation
@@ -220,4 +210,3 @@ pip install cdcore-*.whl
 - `cdcore` wheel: Python 3.10+, no other native dependencies
 - `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
 - `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed — the installer registers the DLL path; `cdwinfs.exe` finds it automatically
-- Audio virtual view (`.wem.ogg/`): no external tools — handled by `cdcore::formats::audio`
