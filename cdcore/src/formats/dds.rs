@@ -703,3 +703,205 @@ pub fn decode_dds_to_rgba(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
 
     Ok((w, h, rgba))
 }
+
+// ---------------------------------------------------------------------------
+// Encoding
+// ---------------------------------------------------------------------------
+
+/// Re-encode RGBA bytes to a DDS file matching the format of `original_dds`.
+///
+/// Supported output formats: BC1/DXT1, BC3/DXT5, BC4U, BC5U.
+/// Returns an error for unsupported formats (BC6H, BC7, uncompressed, etc.).
+pub fn encode_dds_matching(rgba: &[u8], w: u32, h: u32, original_dds: &[u8]) -> Result<Vec<u8>> {
+    let hdr = parse_header(original_dds)?;
+    let blocks = match hdr.format {
+        DdsFormat::Bc1 => enc_bc1(rgba, w, h),
+        DdsFormat::Bc3 => enc_bc3(rgba, w, h),
+        DdsFormat::Bc4 => enc_bc4(rgba, w, h, 0),
+        DdsFormat::Bc5 => enc_bc5(rgba, w, h),
+        _ => return Err(ParseError::Other(format!(
+            "encode_dds_matching: unsupported format {:?}", hdr.format
+        ))),
+    };
+    let fourcc: &[u8; 4] = match hdr.format {
+        DdsFormat::Bc1 => b"DXT1",
+        DdsFormat::Bc3 => b"DXT5",
+        DdsFormat::Bc4 => b"BC4U",
+        DdsFormat::Bc5 => b"BC5U",
+        _ => unreachable!(),
+    };
+    Ok(make_dds(w, h, fourcc, &blocks))
+}
+
+fn make_dds(w: u32, h: u32, fourcc: &[u8; 4], blocks: &[u8]) -> Vec<u8> {
+    let mut out = vec![0u8; 128 + blocks.len()];
+    out[0..4].copy_from_slice(b"DDS ");
+    out[4..8].copy_from_slice(&124u32.to_le_bytes());   // dwSize
+    out[8..12].copy_from_slice(&0x0002_1007u32.to_le_bytes()); // CAPS|H|W|PF|LINEARSIZE
+    out[12..16].copy_from_slice(&h.to_le_bytes());
+    out[16..20].copy_from_slice(&w.to_le_bytes());
+    out[20..24].copy_from_slice(&(blocks.len() as u32).to_le_bytes());
+    out[28..32].copy_from_slice(&1u32.to_le_bytes()); // mipMapCount
+    out[76..80].copy_from_slice(&32u32.to_le_bytes()); // ddspf.dwSize
+    out[80..84].copy_from_slice(&4u32.to_le_bytes());  // DDPF_FOURCC
+    out[84..88].copy_from_slice(fourcc);
+    out[108..112].copy_from_slice(&0x1000u32.to_le_bytes()); // DDSCAPS_TEXTURE
+    out[128..].copy_from_slice(blocks);
+    out
+}
+
+fn enc_bc1(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    use rayon::prelude::*;
+    let bw = (w + 3) / 4;
+    let mut out = vec![0u8; ((w+3)/4 * (h+3)/4 * 8) as usize];
+    out.par_chunks_mut(8).enumerate().for_each(|(i, slot)| {
+        let block = extract_4x4(rgba, w, h, (i % bw as usize) as u32 * 4, (i / bw as usize) as u32 * 4);
+        slot.copy_from_slice(&bc1_block(&block));
+    });
+    out
+}
+
+fn enc_bc4(rgba: &[u8], w: u32, h: u32, ch: usize) -> Vec<u8> {
+    use rayon::prelude::*;
+    let bw = (w + 3) / 4;
+    let mut out = vec![0u8; ((w+3)/4 * (h+3)/4 * 8) as usize];
+    out.par_chunks_mut(8).enumerate().for_each(|(i, slot)| {
+        let block = extract_4x4(rgba, w, h, (i % bw as usize) as u32 * 4, (i / bw as usize) as u32 * 4);
+        slot.copy_from_slice(&bc4_block(&block, ch));
+    });
+    out
+}
+
+fn enc_bc5(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    use rayon::prelude::*;
+    let bw = (w + 3) / 4;
+    let mut out = vec![0u8; ((w+3)/4 * (h+3)/4 * 16) as usize];
+    out.par_chunks_mut(16).enumerate().for_each(|(i, slot)| {
+        let block = extract_4x4(rgba, w, h, (i % bw as usize) as u32 * 4, (i / bw as usize) as u32 * 4);
+        slot[..8].copy_from_slice(&bc4_block(&block, 0));
+        slot[8..].copy_from_slice(&bc4_block(&block, 1));
+    });
+    out
+}
+
+fn enc_bc3(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    use rayon::prelude::*;
+    let bw = (w + 3) / 4;
+    let mut out = vec![0u8; ((w+3)/4 * (h+3)/4 * 16) as usize];
+    out.par_chunks_mut(16).enumerate().for_each(|(i, slot)| {
+        let block = extract_4x4(rgba, w, h, (i % bw as usize) as u32 * 4, (i / bw as usize) as u32 * 4);
+        slot[..8].copy_from_slice(&bc4_block(&block, 3));
+        slot[8..].copy_from_slice(&bc1_block(&block));
+    });
+    out
+}
+
+fn extract_4x4(rgba: &[u8], w: u32, h: u32, bx: u32, by: u32) -> [u8; 64] {
+    let mut block = [0u8; 64];
+    for py in 0..4u32 {
+        for px in 0..4u32 {
+            let sx = (bx + px).min(w - 1);
+            let sy = (by + py).min(h - 1);
+            let src = ((sy * w + sx) * 4) as usize;
+            let dst = ((py * 4 + px) * 4) as usize;
+            block[dst..dst+4].copy_from_slice(&rgba[src..src+4]);
+        }
+    }
+    block
+}
+
+fn bc1_block(block: &[u8; 64]) -> [u8; 8] {
+    // PCA color axis: one power-iteration step from the covariance matrix.
+    let mut mean = [0f32; 3];
+    for i in 0..16 {
+        mean[0] += block[i*4] as f32;
+        mean[1] += block[i*4+1] as f32;
+        mean[2] += block[i*4+2] as f32;
+    }
+    mean[0] /= 16.0; mean[1] /= 16.0; mean[2] /= 16.0;
+
+    let mut cov = [0f32; 6];
+    for i in 0..16 {
+        let (dr, dg, db) = (block[i*4] as f32 - mean[0], block[i*4+1] as f32 - mean[1], block[i*4+2] as f32 - mean[2]);
+        cov[0] += dr*dr; cov[1] += dg*dg; cov[2] += db*db;
+        cov[3] += dr*dg; cov[4] += dr*db; cov[5] += dg*db;
+    }
+    let mut axis = [cov[0]+cov[3]+cov[4], cov[1]+cov[3]+cov[5], cov[2]+cov[4]+cov[5]];
+    let len = (axis[0]*axis[0] + axis[1]*axis[1] + axis[2]*axis[2]).sqrt();
+    if len < 1e-6 { axis = [1.0, 1.0, 1.0]; } else { axis[0] /= len; axis[1] /= len; axis[2] /= len; }
+
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    let (mut lc, mut hc) = ([0u8;3], [0u8;3]);
+    for i in 0..16 {
+        let (r, g, b) = (block[i*4] as f32, block[i*4+1] as f32, block[i*4+2] as f32);
+        let t = (r-mean[0])*axis[0] + (g-mean[1])*axis[1] + (b-mean[2])*axis[2];
+        if t < lo { lo = t; lc = [r as u8, g as u8, b as u8]; }
+        if t > hi { hi = t; hc = [r as u8, g as u8, b as u8]; }
+    }
+
+    let c0 = rgb_to_565(hc[0], hc[1], hc[2]);
+    let c1 = rgb_to_565(lc[0], lc[1], lc[2]);
+    let palette = if c0 >= c1 {
+        [rgb565_to_888(c0), rgb565_to_888(c1),
+         lerp3_rgb(rgb565_to_888(c0), rgb565_to_888(c1), 2, 1),
+         lerp3_rgb(rgb565_to_888(c0), rgb565_to_888(c1), 1, 2)]
+    } else {
+        [rgb565_to_888(c0), rgb565_to_888(c1),
+         lerp3_rgb(rgb565_to_888(c0), rgb565_to_888(c1), 1, 1),
+         [0,0,0]]
+    };
+    let mut idx = 0u32;
+    for i in 0..16 {
+        let (r, g, b) = (block[i*4] as i32, block[i*4+1] as i32, block[i*4+2] as i32);
+        let best = (0..4usize).min_by_key(|&j| {
+            let dr = r - palette[j][0] as i32;
+            let dg = g - palette[j][1] as i32;
+            let db = b - palette[j][2] as i32;
+            dr*dr + dg*dg + db*db
+        }).unwrap();
+        idx |= (best as u32) << (i * 2);
+    }
+    let mut out = [0u8; 8];
+    out[0..2].copy_from_slice(&c0.to_le_bytes());
+    out[2..4].copy_from_slice(&c1.to_le_bytes());
+    out[4..8].copy_from_slice(&idx.to_le_bytes());
+    out
+}
+
+fn bc4_block(block: &[u8; 64], ch: usize) -> [u8; 8] {
+    let vals: [u8; 16] = std::array::from_fn(|i| block[i*4 + ch]);
+    let r0 = *vals.iter().max().unwrap();
+    let r1 = *vals.iter().min().unwrap();
+    let refs: [u8; 8] = [r0, r1,
+        ((6*r0 as u32 + 1*r1 as u32)/7) as u8, ((5*r0 as u32 + 2*r1 as u32)/7) as u8,
+        ((4*r0 as u32 + 3*r1 as u32)/7) as u8, ((3*r0 as u32 + 4*r1 as u32)/7) as u8,
+        ((2*r0 as u32 + 5*r1 as u32)/7) as u8, ((1*r0 as u32 + 6*r1 as u32)/7) as u8,
+    ];
+    let mut bits: u64 = 0;
+    for i in 0..16 {
+        let v = vals[i] as i32;
+        let idx = (0..8usize).min_by_key(|&j| (v - refs[j] as i32).abs()).unwrap();
+        bits |= (idx as u64) << (i * 3);
+    }
+    [r0, r1,
+     (bits & 0xff) as u8, ((bits>>8) & 0xff) as u8, ((bits>>16) & 0xff) as u8,
+     ((bits>>24) & 0xff) as u8, ((bits>>32) & 0xff) as u8, ((bits>>40) & 0xff) as u8]
+}
+
+fn rgb_to_565(r: u8, g: u8, b: u8) -> u16 {
+    ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)
+}
+
+fn rgb565_to_888(v: u16) -> [u8; 3] {
+    let r = ((v >> 11) & 0x1f) as u8;
+    let g = ((v >> 5)  & 0x3f) as u8;
+    let b = (v & 0x1f) as u8;
+    [(r << 3)|(r >> 2), (g << 2)|(g >> 4), (b << 3)|(b >> 2)]
+}
+
+fn lerp3_rgb(a: [u8;3], b: [u8;3], wa: u32, wb: u32) -> [u8; 3] {
+    let t = wa + wb;
+    [((a[0] as u32*wa + b[0] as u32*wb)/t) as u8,
+     ((a[1] as u32*wa + b[1] as u32*wb)/t) as u8,
+     ((a[2] as u32*wa + b[2] as u32*wb)/t) as u8]
+}

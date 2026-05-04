@@ -18,7 +18,6 @@ memmap2   = "0.9"                                          # memory-mapped PAZ f
 rayon     = "1"                                            # dedicated thread pool for concurrent file decodes
 ratatui   = "0.29"                                         # TUI framework (re-exports crossterm)
 png       = "0.17"                                         # PNG encoder for .dds.png/ virtual view
-image_dds = "0.5"                                          # DDS re-encoder for .dds.png/ write-back
 fuser     = { version = "0.15", features = ["abi-7-21"] } # FUSE filesystem; abi-7-21 enables READDIRPLUS
 libc      = "0.2"                                          # uid/gid, EISDIR, ENOENT constants
 
