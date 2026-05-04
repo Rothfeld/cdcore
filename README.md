@@ -3,8 +3,13 @@
 | Crate | Platform | Description |
 |-------|----------|-------------|
 | [`cdcore`](#cdcore) | any | Rust library — VFS, parsers, crypto, audio, DDS; exposed to Python via PyO3 |
-| [`cdfuse`](#cdfuse-linux--cdwinfs-windows) | Linux | FUSE filesystem mount for Crimson Desert archives |
-| [`cdwinfs`](#cdfuse-linux--cdwinfs-windows) | Windows | WinFSP filesystem mount for Crimson Desert archives (GPL-3.0) |
+| ├─ [`cdfuse`](#cdfuse-linux--cdwinfs-windows) | Linux | FUSE filesystem mount for Crimson Desert archives |
+| └─ [`cdwinfs`](#cdfuse-linux--cdwinfs-windows) | Windows | WinFSP filesystem mount for Crimson Desert archives (GPL-3.0) |
+
+```bash
+bash build.sh   # Linux
+build.cmd       # Windows
+```
 
 These crates are unaffiliated companion tooling for the excellent
 [CrimsonForge](https://github.com/hzeemr/crimsonforge) modding studio.
@@ -24,24 +29,38 @@ the top of `main.py` to activate:
 import cdcore  # monkeypatches vfs, dds reader and mesh reader with native implementations
 ```
 
-**Build and install:**
-```bash
-cd cdcore
-./build.sh
+The import injects three transparent proxies into `sys.modules`:
+
+- `core.vfs_manager.VfsManager` → Rust VFS (PAPGT + PAMT + PAZ, parallel load, LRU cache)
+- `core.dds_reader.decode_dds_to_rgba` → Rust DDS decoder (BC1-BC7, BC6H, float variants)
+- `core.mesh_parser.parse_pam` / `parse_pamlod` → Rust mesh parsers (30–70× faster)
+
+All other attributes on those modules fall through to the original Python
+implementations, so cdcore can be adopted incrementally with no other code changes.
+
+The wheel also exposes the underlying Rust API directly for use outside CrimsonForge:
+
+```python
+import cdcore
+
+# VFS
+vfs = cdcore.VfsManager("/path/to/crimson_desert")
+vfs.load_group("0000")
+entry = vfs.get_pamt("0000").file_entries[0]
+data  = vfs.read_entry(entry)          # bytes: decrypted + decompressed
+
+# DDS decode
+width, height, rgba = cdcore.decode_dds_to_rgba(data)
+
+# Mesh parsing
+mesh = cdcore.parse_pam(data, "object/foo.pam")
+for sub in mesh.submeshes:
+    print(sub.name, len(sub.vertices), "verts")
 ```
 
 ---
 
 ### `cdfuse` (Linux) / `cdwinfs` (Windows)
-
-![cdfuse demo](.assets/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?")
-
-<details>
-<summary>Architecture diagram</summary>
-
-![architecture](.assets/diagram.svg "boy, now that i made a diagram it sure looks a lot more professional than it felt building it")
-
-</details>
 
 Filesystem that mounts Crimson Desert archives as a browsable directory tree.
 Files are transparently decrypted and decompressed on access.
@@ -49,6 +68,7 @@ Supports read-write: edit files in place or drag-and-drop replacements.
 By default, closing a modified file immediately repacks it into the PAZ archives
 in the background. Pass `--no-auto-repack` to disable this and use `[s]` to
 flush manually instead.
+
 
 | Crate | Platform | Driver | License | Requirement |
 |-------|----------|--------|---------|-------------|
@@ -58,12 +78,15 @@ flush manually instead.
 `cdwinfs` is GPL-3.0 because `winfsp-rs` (the Rust WinFSP bindings) declares
 GPL-3.0. The underlying WinFSP driver has a FLOSS exception; replacing the
 binding crate with hand-generated bindgen output would allow relicensing to MIT.
+<details>
+<summary>Architecture diagram</summary>
 
-**Build:**
-```bash
-bash build.sh     # Linux  — generates licenses, builds cdcore + cdfuse
-build.cmd         # Windows — generates licenses, builds cdcore + cdwinfs
-```
+![architecture](.assets/diagram.svg "boy, now that i made a diagram it sure looks a lot more professional than it felt building it")
+
+</details>
+
+![cdfuse demo](.assets/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?")
+
 
 **First launch — interactive setup:**
 
