@@ -167,7 +167,7 @@ impl SharedFs {
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
         let repack_engine = RepackEngine::new(&packages_path, None);
         let decode_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(16)
+            .num_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))
             .thread_name(|i| format!("cdfuse-decode-{i}"))
             .build()
             .expect("failed to build decode thread pool");

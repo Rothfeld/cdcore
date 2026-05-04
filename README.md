@@ -9,6 +9,8 @@
 ```bash
 bash build.sh   # Linux
 build.cmd       # Windows
+
+pip install --force-reinstall cdcore/target/wheels/*.whl
 ```
 
 These crates are unaffiliated companion tooling for the excellent
@@ -145,7 +147,10 @@ modifying the archives:
 .pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx          (static mesh as FBX)
 .pamlod.fbx/character/cd_phm_basic_body.pamlod.fbx         (LOD mesh as FBX)
 .pac.fbx/character/cd_phm_basic_body.pac.fbx               (skinned mesh as FBX)
-.wem.ogg/sound/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg  (audio as OGG)
+.wem.ogg/sound/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg        (default)
+.wem.ogg/sound@0005/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg  (Korean)
+.wem.ogg/sound@0006/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg  (English)
+.wem.ogg/sound@0035/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg  (Japanese)
 ```
 
 `.paloc.jsonl/` and `.dds.png/` support write-back: saving a file converts it
@@ -153,6 +158,12 @@ back to the original binary format and repacks it automatically.
 
 `.wem.ogg/` is handled entirely in Rust by `cdcore::formats::audio` — no
 external tools required. OGG conversion is on-demand and lossless.
+
+When multiple packages share the same directory (Crimson Desert ships Korean,
+English, and Japanese voice in separate packages but under the same `sound/`
+path), the VFS automatically exposes `sound@0005/`, `sound@0006/`, `sound@0035/`
+alongside the default `sound/` so all language variants are accessible without
+ambiguity. This applies to any directory found in more than one package.
 
 The FBX exporter is a Rust port of CrimsonForge's `mesh_exporter.py`, producing
 binary FBX 7.4 files compatible with Blender, Maya, and Unreal.
@@ -167,8 +178,11 @@ krita /media/max/cd/.dds.png/ui/bitmap_bell.dds.png
 # Open a mesh in Blender
 blender /media/max/cd/.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx
 
-# Play a voice line
+# Play a voice line (default / last-loaded package)
 mpv /media/max/cd/.wem.ogg/sound/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg
+
+# Play the English version specifically
+mpv /media/max/cd/.wem.ogg/sound@0006/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg
 ```
 
 ---

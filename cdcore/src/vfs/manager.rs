@@ -70,6 +70,7 @@ impl VfsManager {
 
         self.pamt_cache.insert(group_dir.to_string(), pamt);
         self.loaded.insert(group_dir.to_string(), ());
+        self.expose_multi_package_dirs();
         Ok(())
     }
 
@@ -112,6 +113,7 @@ impl VfsManager {
             self.pamt_cache.insert(group.clone(), pamt);
             self.loaded.insert(group, ());
         }
+        self.expose_multi_package_dirs();
         Ok(())
     }
 
@@ -314,6 +316,66 @@ impl VfsManager {
         drop(tree);
         self.pamt_cache.remove(group_dir);
         self.loaded.remove(group_dir);
+    }
+
+    /// Expose multi-package top-level directories as `dir@group/` aliases.
+    ///
+    /// Scans the tree for top-level directory names that have entries from
+    /// more than one package group.  For each such directory, inserts alias
+    /// entries `dir@group/rest/of/path` alongside the default `dir/rest/of/path`
+    /// so callers can request a specific language/variant explicitly.
+    ///
+    /// Example: `sound/` appears in groups 0005, 0006, 0035 →
+    ///   `sound@0005/nhm_adult_noble_1_hello.wem` (Korean)
+    ///   `sound@0006/nhm_adult_noble_1_hello.wem` (English)
+    ///   `sound@0035/nhm_adult_noble_1_hello.wem` (Japanese)
+    ///
+    /// Called automatically after every `load_group` and `load_all_groups`.
+    /// Idempotent: existing `@` aliases are removed and rebuilt on each call.
+    pub fn expose_multi_package_dirs(&self) {
+        let tree_r = self.tree.read().unwrap();
+
+        // Find top-level dirs that appear in more than one group.
+        let mut dir_groups: std::collections::HashMap<&str, std::collections::HashSet<&str>> =
+            std::collections::HashMap::new();
+        for (path, (_, group)) in tree_r.iter() {
+            // Skip existing aliases.
+            if path.contains('@') { continue; }
+            if let Some(slash) = path.find('/') {
+                dir_groups.entry(&path[..slash])
+                    .or_default()
+                    .insert(group.as_str());
+            }
+        }
+
+        let multi_dirs: std::collections::HashSet<String> = dir_groups
+            .into_iter()
+            .filter(|(_, groups)| groups.len() > 1)
+            .map(|(dir, _)| dir.to_string())
+            .collect();
+
+        if multi_dirs.is_empty() { return; }
+
+        // Collect aliases to insert.
+        let mut new_entries: Vec<(String, Entry)> = Vec::new();
+        for (path, (entry, group)) in tree_r.iter() {
+            if path.contains('@') { continue; }
+            if let Some(slash) = path.find('/') {
+                let top = &path[..slash];
+                if multi_dirs.contains(top) {
+                    let alias = format!("{}@{}{}", top, group, &path[slash..]);
+                    new_entries.push((alias, (entry.clone(), group.clone())));
+                }
+            }
+        }
+        drop(tree_r);
+
+        let mut tree_w = self.tree.write().unwrap();
+        // Remove stale aliases before reinserting.
+        tree_w.retain(|k, _| !k.contains('@'));
+        for (path, entry) in new_entries {
+            tree_w.insert(path, entry);
+        }
     }
 
     pub fn reload(&mut self) -> Result<()> {
