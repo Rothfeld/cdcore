@@ -125,12 +125,10 @@ pub struct SharedFs {
     readonly:       bool,
     auto_repack:    bool,
     recent_events:  Mutex<VecDeque<String>>,
-    pub ffmpeg: Option<std::path::PathBuf>,
 }
 
 impl SharedFs {
-    fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool,
-                 ffmpeg: Option<std::path::PathBuf>) -> Self {
+    fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
         let repack_engine = RepackEngine::new(&packages_path, None);
@@ -148,12 +146,10 @@ impl SharedFs {
             readonly,
             auto_repack,
             recent_events: Mutex::new(VecDeque::new()),
-            ffmpeg,
         }
     }
 
     pub fn is_readonly(&self) -> bool { self.readonly }
-    pub fn has_ffmpeg(&self) -> bool { self.ffmpeg.is_some() }
 
     pub fn push_event(&self, msg: String) {
         let mut q = self.recent_events.lock().unwrap();
@@ -572,9 +568,8 @@ impl SharedFs {
 pub struct CdWinFs(Arc<SharedFs>);
 
 impl CdWinFs {
-    pub fn new(vfs: VfsManager, readonly: bool, auto_repack: bool,
-               ffmpeg: Option<std::path::PathBuf>) -> Self {
-        CdWinFs(Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack, ffmpeg)))
+    pub fn new(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
+        CdWinFs(Arc::new(SharedFs::new_inner(vfs, readonly, auto_repack)))
     }
 
     pub fn shared(&self) -> Arc<SharedFs> { Arc::clone(&self.0) }

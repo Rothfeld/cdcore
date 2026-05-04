@@ -1,3 +1,5 @@
 target/
 python/cdcore.pyi
 python/cdcore/__init__.pyi
+.*
+!.gitignore

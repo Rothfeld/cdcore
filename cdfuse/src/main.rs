@@ -135,8 +135,7 @@ fn main() {
         }
     }
 
-    let ffmpeg = setup::detect_ffmpeg();
-    let fs = fs::CdFs::new(vfs, args.readonly, !args.no_auto_repack, ffmpeg);
+    let fs = fs::CdFs::new(vfs, args.readonly, !args.no_auto_repack);
     let shared = fs.shared();
 
     let mut options = vec![

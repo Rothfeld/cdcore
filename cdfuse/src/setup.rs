@@ -2,30 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-// -- Optional tool detection --------------------------------------------------
-
-/// Find ffmpeg in PATH or the CrimsonForge managed tools directory.
-pub fn detect_ffmpeg() -> Option<PathBuf> {
-    find_tool(&["ffmpeg"])
-}
-
-fn find_tool(names: &[&str]) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
-    for dir in std::env::split_paths(&path_var) {
-        for &name in names {
-            let p = dir.join(name);
-            if p.exists() { return Some(p); }
-        }
-    }
-    // Check managed install location used by CrimsonForge
-    let home = std::env::var("HOME").unwrap_or_default();
-    for &name in names {
-        let p = PathBuf::from(&home).join(".crimsonforge/tools").join(name);
-        if p.exists() { return Some(p); }
-    }
-    None
-}
-
 /// Try to locate the Crimson Desert packages directory.
 pub fn detect_game_dir() -> Option<PathBuf> {
     // 1. /cd — devcontainer mount
