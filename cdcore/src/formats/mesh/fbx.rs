@@ -15,6 +15,7 @@ use super::pam::SubMesh;
 // FBX property encoding
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 enum Prop<'a> {
     Bool(bool),
     I32(i32),

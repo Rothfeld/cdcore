@@ -2,7 +2,6 @@ pub mod archive;
 pub mod compression;
 pub mod crypto;
 pub mod error;
-pub mod ffi;
 pub mod formats;
 pub mod repack;
 pub mod vfs;
