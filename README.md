@@ -101,8 +101,8 @@ are filled.
 
 **CLI usage:**
 ```bash
-cdfuse [GAME_DIR] [MOUNT]          # Linux — args override saved config
-cdwinfs.exe [GAME_DIR] [DRIVE]     # Windows — DRIVE is a single letter, e.g. Y
+cdfuse /cd /media/max/cd                 # Linux
+cdwinfs.exe "C:\Program Files (x86)\Steam\steamapps\common\Crimson Desert" Y
 cdfuse --licenses                  # print third-party dependency licenses
 ```
 

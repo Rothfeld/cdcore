@@ -70,7 +70,6 @@ impl VfsManager {
 
         self.pamt_cache.insert(group_dir.to_string(), pamt);
         self.loaded.insert(group_dir.to_string(), ());
-        self.expose_multi_package_dirs();
         Ok(())
     }
 

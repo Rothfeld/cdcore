@@ -19,7 +19,7 @@ struct Args {
     #[arg(value_name = "GAME_DIR")]
     game_dir: Option<String>,
 
-    /// Mount point — drive letter (X:) or empty directory path.
+    /// Drive letter to mount on, single character (e.g. Y).
     /// Omit to load from saved config or run the interactive setup wizard.
     #[arg(value_name = "MOUNT")]
     mount: Option<String>,
@@ -71,12 +71,17 @@ fn main() {
     // Resolve game_dir + mount: CLI args → saved config → interactive setup.
     let (game_dir, mount) = match (args.game_dir.as_deref(), args.mount.as_deref()) {
         (Some(gd), Some(m)) => {
-            // Args provided — save them for next time, then use them.
-            let cfg = config::Config { game_dir: gd.to_string(), mount: m.to_string() };
+            let ch = m.chars().next().unwrap_or('\0');
+            if m.len() != 1 || !ch.is_ascii_alphabetic() {
+                eprintln!("error: drive must be a single letter, e.g. Y");
+                std::process::exit(1);
+            }
+            let drive = ch.to_ascii_uppercase().to_string();
+            let cfg = config::Config { game_dir: gd.to_string(), mount: drive.clone() };
             if let Err(e) = config::save(&cfg) {
                 eprintln!("warning: could not save config: {e}");
             }
-            (gd.to_string(), m.to_string())
+            (gd.to_string(), drive)
         }
         _ => {
             // No (or partial) CLI args — try saved config first.
@@ -86,7 +91,7 @@ fn main() {
                 .or_else(|| setup::detect_game_dir());
             let drive_hint = saved.as_ref()
                 .map(|c| c.mount.clone())
-                .unwrap_or_else(|| setup::detect_free_drive().unwrap_or_else(|| "Y:".to_string()));
+                .unwrap_or_else(|| setup::detect_free_drive().unwrap_or_else(|| "Y".to_string()));
             let drive_detected = saved.is_none();
 
             match tui::select_paths(game_dir_hint, drive_hint, drive_detected) {
@@ -122,6 +127,7 @@ fn main() {
             info!("loading group {g}");
             vfs.load_group(g).unwrap_or_else(|e| log::warn!("{e}"));
         }
+        vfs.expose_multi_package_dirs();
     } else {
         let groups = vfs.list_groups().unwrap_or_else(|e| {
             log::warn!("list_groups failed: {e}");
@@ -131,6 +137,7 @@ fn main() {
         for g in &groups {
             vfs.load_group(g).unwrap_or_else(|e| log::warn!("{e}"));
         }
+        vfs.expose_multi_package_dirs();
     }
 
     let cdfs = fs::CdWinFs::new(vfs, args.readonly, !args.no_auto_repack);
@@ -155,7 +162,8 @@ fn main() {
     let mut host = winfsp::host::FileSystemHost::new(volume_params, cdfs)
         .unwrap_or_else(|e| { eprintln!("create host: {e}"); std::process::exit(1); });
 
-    host.mount(&mount)
+    let mount_point = format!("{mount}:");
+    host.mount(&mount_point)
         .unwrap_or_else(|e| { eprintln!("mount {mount}: {e}"); std::process::exit(1); });
 
     host.start()

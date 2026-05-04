@@ -124,6 +124,7 @@ fn main() {
             info!("loading group {g}");
             vfs.load_group(g).unwrap_or_else(|e| log::warn!("{e}"));
         }
+        vfs.expose_multi_package_dirs();
     } else {
         let groups = vfs.list_groups().unwrap_or_else(|e| {
             log::warn!("list_groups failed: {e}");
@@ -133,6 +134,7 @@ fn main() {
         for g in &groups {
             vfs.load_group(g).unwrap_or_else(|e| log::warn!("{e}"));
         }
+        vfs.expose_multi_package_dirs();
     }
 
     let fs = fs::CdFs::new(vfs, args.readonly, !args.no_auto_repack);
