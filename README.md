@@ -83,7 +83,7 @@ binding crate with hand-generated bindgen output would allow relicensing to MIT.
 
 </details>
 
-![cdfuse demo](.assets/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?")
+![cdfuse demo](.assets/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?") ![cdwinfs demo](.assets/cdwinfs_demo.webp "edit a texture in paint, save it, watch the mod land in the PAZ. no alt-tabbing to an unpacker.")
 
 
 **First launch -- interactive setup:**
