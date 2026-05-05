@@ -109,10 +109,38 @@ fn main() {
 
     // The winfsp crate no longer uses the `system` feature (which required WinFSP
     // installed at *build* time for bindgen to find headers).  Without it,
-    // winfsp_init_or_die only tries LoadLibraryW("winfsp-x64.dll"), which fails
-    // unless the WinFSP bin dir is in PATH.  Add it from the registry ourselves.
+    // winfsp_init only tries LoadLibraryW("winfsp-x64.dll"), which fails unless
+    // the WinFSP bin dir is in PATH.  Add it from the registry ourselves.
     add_winfsp_bin_to_path();
-    let _init = winfsp::winfsp_init_or_die();
+    let _init = winfsp::winfsp_init().unwrap_or_else(|e| {
+        // We deliberately do NOT use winfsp_init_or_die here -- that variant
+        // calls process::exit with an opaque NTSTATUS and no message at all,
+        // which is the worst possible UX for the most common first-run failure
+        // (WinFSP not installed).
+        eprintln!("error: failed to load WinFSP runtime ({e:?})");
+        eprintln!();
+        match winfsp_install_dir() {
+            Some(dir) => {
+                eprintln!("WinFSP appears to be installed at:");
+                eprintln!("    {dir}");
+                eprintln!();
+                eprintln!("but `winfsp-x64.dll` could not be loaded.  Possible causes:");
+                eprintln!("  - the install is for a different architecture (need x64)");
+                eprintln!("  - the DLL or its dependencies are corrupted -- reinstall WinFSP");
+                eprintln!("  - the WinFsp.Launcher service is disabled (services.msc)");
+            }
+            None => {
+                eprintln!("WinFSP is not installed (no entry under");
+                eprintln!("HKLM\\SOFTWARE\\WOW6432Node\\WinFsp in the registry).");
+                eprintln!();
+                eprintln!("Download and install WinFSP from:");
+                eprintln!("    https://winfsp.dev/rel/");
+                eprintln!();
+                eprintln!("Then run cdwinfs again.");
+            }
+        }
+        std::process::exit(1);
+    });
 
     let vfs = VfsManager::new(&game_dir).unwrap_or_else(|e| {
         eprintln!("error: {e}");
@@ -189,29 +217,34 @@ fn main() {
     drop(host);
 }
 
-/// Add the WinFSP bin directory to PATH so that winfsp_init_or_die can find
-/// winfsp-x64.dll via LoadLibraryW.  Reads HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir
-/// using `reg query` (no extra dependencies).  Silent no-op if not installed or
-/// if the DLL is already findable (e.g. WinFSP bin is already in PATH).
-fn add_winfsp_bin_to_path() {
+/// Read `HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir` via `reg query`.  Returns
+/// the install path with any trailing backslash stripped, or `None` if WinFSP
+/// isn't installed (no registry entry) or `reg` itself failed.
+fn winfsp_install_dir() -> Option<String> {
     let output = std::process::Command::new("reg")
         .args(["query", r"HKLM\SOFTWARE\WOW6432Node\WinFsp", "/v", "InstallDir"])
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return,
-    };
-
+        .output()
+        .ok()?;
+    if !output.status.success() { return None; }
     let text = String::from_utf8_lossy(&output.stdout);
     for line in text.lines() {
         if let Some(pos) = line.find("REG_SZ") {
-            let install_dir = line[pos + "REG_SZ".len()..].trim().trim_end_matches('\\');
-            let bin = format!("{install_dir}\\bin");
-            let old_path = std::env::var("PATH").unwrap_or_default();
-            // Prepend so the WinFSP DLL takes priority over any stale copy elsewhere.
-            let _ = std::env::set_var("PATH", format!("{bin};{old_path}"));
-            return;
+            let dir = line[pos + "REG_SZ".len()..].trim().trim_end_matches('\\');
+            if !dir.is_empty() {
+                return Some(dir.to_string());
+            }
         }
     }
+    None
+}
+
+/// Prepend the WinFSP bin directory to PATH so `winfsp_init` can find
+/// winfsp-x64.dll via LoadLibraryW.  Silent no-op if WinFSP isn't installed --
+/// the subsequent `winfsp_init` failure path surfaces a friendly error.
+fn add_winfsp_bin_to_path() {
+    let Some(dir) = winfsp_install_dir() else { return };
+    let bin = format!("{dir}\\bin");
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    // Prepend so the WinFSP DLL takes priority over any stale copy elsewhere.
+    let _ = std::env::set_var("PATH", format!("{bin};{old_path}"));
 }
