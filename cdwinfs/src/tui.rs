@@ -603,7 +603,9 @@ fn draw(
     // Events panel
     if event_height > 0 {
         let rows: Vec<ListItem> = events.iter().map(|e| {
-            let style = if e.starts_with("[err]") {
+            // Match `[err]` anywhere -- events are now prefixed with a
+            // `[HH:MM:SS]` timestamp, so the level marker isn't at offset 0.
+            let style = if e.contains("[err]") {
                 Style::default().fg(Color::Red)
             } else {
                 Style::default().fg(Color::Green)

@@ -82,6 +82,22 @@ fn vfs_path(p: &U16CStr) -> String {
     s.replace('\\', "/")
 }
 
+// `[HH:MM:SS]` UTC for TUI event log lines.  Matches the timestamp style
+// env_logger writes into cdwinfs.log so a user comparing the two can line
+// events up at a glance.  UTC keeps things free of TZ deps; the TUI label
+// is short enough that local-vs-UTC ambiguity isn't a concern.
+fn event_timestamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let day_secs = secs % 86_400;
+    let h = day_secs / 3600;
+    let m = (day_secs / 60) % 60;
+    let s = day_secs % 60;
+    format!("[{h:02}:{m:02}:{s:02}]")
+}
+
 // Convert SystemTime to Windows FILETIME (100-ns intervals since 1601-01-01).
 fn to_filetime(t: SystemTime) -> u64 {
     const OFFSET: u64 = 116_444_736_000_000_000;
@@ -146,7 +162,7 @@ impl SharedFs {
     fn new_inner(vfs: VfsManager, readonly: bool, auto_repack: bool) -> Self {
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
-        let repack_engine = RepackEngine::new(&packages_path, None);
+        let repack_engine = RepackEngine::new(&packages_path);
         SharedFs {
             vfs,
             decode_cache:  Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CACHE_ENTRIES).unwrap())),
@@ -169,7 +185,7 @@ impl SharedFs {
     pub fn push_event(&self, msg: String) {
         let mut q = self.recent_events.lock().unwrap();
         if q.len() >= 10 { q.pop_front(); }
-        q.push_back(msg);
+        q.push_back(format!("{} {msg}", event_timestamp()));
     }
 
     pub fn recent_events(&self) -> Vec<String> {
@@ -384,19 +400,15 @@ impl SharedFs {
             let end = (start + entry.comp_size as usize).min(mmap.len());
             mmap[start..end].to_vec()
         } else {
-            use std::io::{Read, Seek, SeekFrom};
-            let mut f = match std::fs::File::open(&entry.paz_file) {
-                Ok(f)  => f,
-                Err(e) => { warn!("decode {path}: open {}: {e}", entry.paz_file); return None; }
-            };
-            if let Err(e) = f.seek(SeekFrom::Start(entry.offset)) {
-                warn!("decode {path}: seek: {e}"); return None;
+            // Use cdcore::archive::paz::read_bytes -- it opens with full
+            // read/write/delete sharing on Windows, so a concurrent repack
+            // append on the same archive does not trigger `os error 32`.
+            match cdcore::archive::paz::read_bytes(
+                &entry.paz_file, entry.offset, entry.comp_size as usize,
+            ) {
+                Ok(buf) => buf,
+                Err(e)  => { warn!("decode {path}: read: {e}"); return None; }
             }
-            let mut buf = vec![0u8; entry.comp_size as usize];
-            if let Err(e) = f.read_exact(&mut buf) {
-                warn!("decode {path}: read: {e}"); return None;
-            }
-            buf
         };
 
         let mut data = raw;
@@ -481,11 +493,15 @@ impl SharedFs {
         };
         self.cache_put(ino_for(path), Arc::from(data.clone()));
         let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir.clone() };
-        match self.repack_engine.repack(vec![mf], &self.papgt_path, true) {
+        // Drop our mmap of this PAZ before the repack appends to it.  On
+        // Windows, even with FILE_SHARE_WRITE on the writer side, holding an
+        // active mapping of a file we are about to extend is a recipe for
+        // edge-case races; releasing it makes the append unambiguously safe.
+        self.paz_maps.lock().unwrap().remove(&entry.paz_file);
+        match self.repack_engine.repack(vec![mf], &self.papgt_path) {
             Ok(r) if r.success => {
                 info!("repack {path}: ok");
                 self.push_event(format!("[ok]  repacked {path}"));
-                self.paz_maps.lock().unwrap().remove(&entry.paz_file);
                 if let Err(e) = self.vfs.reload_group(&group_dir) {
                     warn!("repack {path}: reload_group failed: {e}");
                 }

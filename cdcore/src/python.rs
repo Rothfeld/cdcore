@@ -609,7 +609,6 @@ pub struct PyRepackResult {
     pub paz_crc: u32,
     pub pamt_crc: u32,
     pub papgt_crc: u32,
-    pub backup_dir: String,
     pub errors: Vec<String>,
 }
 
@@ -621,7 +620,6 @@ impl PyRepackResult {
     #[getter] fn paz_crc(&self)        -> u32    { self.paz_crc }
     #[getter] fn pamt_crc(&self)       -> u32    { self.pamt_crc }
     #[getter] fn papgt_crc(&self)      -> u32    { self.papgt_crc }
-    #[getter] fn backup_dir(&self)     -> &str   { &self.backup_dir }
     #[getter] fn errors(&self)         -> Vec<String> { self.errors.clone() }
 }
 
@@ -635,17 +633,14 @@ pub struct PyRepackEngine {
 #[pymethods]
 impl PyRepackEngine {
     #[new]
-    #[pyo3(signature = (packages_path, backup_dir=None))]
-    fn new(packages_path: &str, backup_dir: Option<&str>) -> Self {
-        PyRepackEngine { inner: RustRepackEngine::new(packages_path, backup_dir) }
+    fn new(packages_path: &str) -> Self {
+        PyRepackEngine { inner: RustRepackEngine::new(packages_path) }
     }
 
-    #[pyo3(signature = (modified_files, papgt_path, create_backup=true))]
     fn repack(
         &self,
         modified_files: Vec<PyRef<PyModifiedFile>>,
         papgt_path: &str,
-        create_backup: bool,
     ) -> PyResult<PyRepackResult> {
         let files: Vec<RustModifiedFile> = modified_files.iter().map(|mf| {
             RustModifiedFile {
@@ -656,7 +651,7 @@ impl PyRepackEngine {
             }
         }).collect();
 
-        let result = self.inner.repack(files, papgt_path, create_backup).map_err(to_pyerr)?;
+        let result = self.inner.repack(files, papgt_path).map_err(to_pyerr)?;
 
         Ok(PyRepackResult {
             success: result.success,
@@ -664,7 +659,6 @@ impl PyRepackEngine {
             paz_crc: result.paz_crc,
             pamt_crc: result.pamt_crc,
             papgt_crc: result.papgt_crc,
-            backup_dir: result.backup_dir,
             errors: result.errors,
         })
     }

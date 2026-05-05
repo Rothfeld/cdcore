@@ -2,23 +2,27 @@
 //!
 //! Steps:
 //!  1. Validate input data (basic magic checks)
-//!  2. Create backup of PAZ, PAMT, PAPGT
-//!  3. Compress (LZ4) + encrypt (ChaCha20) modified data
-//!  4. Append to PAZ (16-byte aligned)
-//!  5. Compute file CRC = pa_checksum(encrypted_bytes)
-//!  6. Update PAMT record: new_comp_size, new_orig_size, new_offset
-//!  7. Update PAZ table CRC in PAMT
-//!  8. Recompute PAMT self-CRC
-//!  9. Write PAMT to disk
-//! 10. Update PAPGT: write new PAMT CRC at correct entry
-//! 11. Recompute PAPGT self-CRC
-//! 12. Write PAPGT to disk
-//! 13. Verify full checksum chain
+//!  2. Compress (LZ4) + encrypt (ChaCha20) modified data
+//!  3. Append to PAZ (16-byte aligned)
+//!  4. Compute file CRC = pa_checksum(encrypted_bytes)
+//!  5. Update PAMT record: new_comp_size, new_orig_size, new_offset
+//!  6. Update PAZ table CRC in PAMT
+//!  7. Recompute PAMT self-CRC
+//!  8. Write PAMT to disk
+//!  9. Update PAPGT: write new PAMT CRC at correct entry
+//! 10. Recompute PAPGT self-CRC
+//! 11. Write PAPGT to disk
+//! 12. Verify full checksum chain
+//!
+//! No backups are taken.  PAZ archives ship with the game; users restore
+//! originals via Steam's "Verify integrity of game files".  The Python
+//! CrimsonForge GUI has its own backup_manager for users who want explicit
+//! pre-edit snapshots (deliberate, not per-save).
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::archive::pamt::{PamtData, PamtFileEntry, update_file_record, update_paz_entry, update_self_crc as pamt_update_crc};
 use crate::archive::papgt::{update_pamt_crc as papgt_update_pamt_crc, update_self_crc as papgt_update_crc, pamt_crc_offset};
@@ -40,41 +44,25 @@ pub struct RepackResult {
     pub paz_crc: u32,
     pub pamt_crc: u32,
     pub papgt_crc: u32,
-    pub backup_dir: String,
     pub errors: Vec<String>,
 }
 
 pub struct RepackEngine {
-    backup_dir: PathBuf,
+    // No state: paths are passed in per call.  The previous backup_dir
+    // field has been removed -- see module docstring.
 }
 
 impl RepackEngine {
-    pub fn new(packages_path: &str, backup_dir: Option<&str>) -> Self {
-        let packages_path = PathBuf::from(packages_path);
-        let backup_dir = backup_dir
-            .map(PathBuf::from)
-            .unwrap_or_else(|| packages_path.parent().unwrap_or(&packages_path).join("crimsonforge_backups"));
-        RepackEngine { backup_dir }
+    pub fn new(_packages_path: &str) -> Self {
+        RepackEngine {}
     }
 
     pub fn repack(
         &self,
         modified_files: Vec<ModifiedFile>,
         papgt_path: &str,
-        create_backup: bool,
     ) -> Result<RepackResult> {
         let mut errors = Vec::new();
-        let backup_dir_used = if create_backup {
-            match self.create_backup(papgt_path, &modified_files) {
-                Ok(d) => d,
-                Err(e) => {
-                    errors.push(format!("backup failed: {e}"));
-                    String::new()
-                }
-            }
-        } else {
-            String::new()
-        };
 
         // Group by package_group
         let mut groups: HashMap<String, Vec<&ModifiedFile>> = HashMap::new();
@@ -169,34 +157,8 @@ impl RepackEngine {
             paz_crc: last_paz_crc,
             pamt_crc: last_pamt_crc,
             papgt_crc: last_papgt_crc,
-            backup_dir: backup_dir_used,
             errors,
         })
-    }
-
-    fn create_backup(&self, papgt_path: &str, files: &[ModifiedFile]) -> Result<String> {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let backup_dir = self.backup_dir.join(format!("backup_{ts}"));
-        fs::create_dir_all(&backup_dir)?;
-
-        let mut to_backup = std::collections::HashSet::new();
-        to_backup.insert(papgt_path.to_string());
-        for mf in files {
-            to_backup.insert(mf.pamt_data.path.clone());
-            to_backup.insert(mf.entry.paz_file.clone());
-        }
-
-        for src in &to_backup {
-            let dest = backup_dir.join(Path::new(src).file_name().unwrap_or_default());
-            if let Err(e) = fs::copy(src, &dest) {
-                eprintln!("backup copy failed for {src}: {e}");
-            }
-        }
-
-        Ok(backup_dir.to_string_lossy().into_owned())
     }
 }
 
