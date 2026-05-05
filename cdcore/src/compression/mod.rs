@@ -1,6 +1,8 @@
 pub mod lz4;
 pub mod zlib;
 
+use log::warn;
+
 use crate::error::{ParseError, Result};
 
 pub const COMP_NONE: u8 = 0;
@@ -28,45 +30,92 @@ pub fn compress_lz4(data: &[u8]) -> Vec<u8> {
     lz4::compress(data)
 }
 
-/// Type-1 dispatcher -- tries each strategy in order, falls back to raw.
+/// Type-1 dispatcher.  Tries each strategy in order.  Each strategy collects
+/// its failure reason so callers see exactly which decoder hit which obstacle.
+///
+/// Recognised type-1 containers carry a "DDS " or "PAR " magic at offset 0.
+/// Files with no recognised magic and no size hint are treated as "no external
+/// compression" -- the comp_type=1 flag is set in PAMT for many PAM/PAMLOD
+/// mesh files that store their geometry raw and decompress internal LZ4
+/// chunks inside the format parser.  We log a warn so the case is visible
+/// and return the raw bytes; the parser does the real work.
+///
+/// Earlier versions silently returned raw bytes on ALL strategy failures,
+/// which masked real DDS decompression bugs (e.g. ui/cd_worldmap_*_sdf_*.dds
+/// tiles rendered as half-black L8 images because the per-mip-sizes strategy
+/// was incorrectly gated behind a parse_dds_mip_info that didn't recognise
+/// DDPF_LUMINANCE).
 fn decompress_type1(data: &[u8], orig_size: usize) -> Result<Vec<u8>> {
-    // Strategy 1: PAR container (starts with "PAR ", per-section LZ4)
-    if data.len() >= 4 && &data[..4] == b"PAR " {
-        if let Ok(result) = try_decompress_type1_par(data) {
-            if result.len() >= orig_size {
-                return Ok(result[..orig_size].to_vec());
-            }
-        }
+    // Some files are flagged compressed but stored raw -- accept when sizes match.
+    if data.len() == orig_size {
+        return Ok(data.to_vec());
     }
 
-    // Strategy 2: DDS header + single LZ4 body
-    if orig_size > data.len() {
-        if let Ok(result) = try_decompress_type1_prefixed_lz4(data, orig_size) {
-            if result.len() >= orig_size {
-                return Ok(result[..orig_size].to_vec());
+    let has_dds_magic = data.len() >= 4 && &data[..4] == b"DDS ";
+
+    // DDS files with comp_type=1 must succeed via one of the four DDS-aware
+    // strategies; failure is a real bug we want to surface, not paper over.
+    if has_dds_magic {
+        let mut reasons: Vec<String> = Vec::new();
+
+        // Strategy 2: DDS header + single LZ4 body
+        if orig_size > data.len() {
+            match try_decompress_type1_prefixed_lz4(data, orig_size) {
+                Ok(r) if r.len() >= orig_size => return Ok(r[..orig_size].to_vec()),
+                Ok(r) => reasons.push(format!("S2(LZ4 body): undersized output {} < {orig_size}", r.len())),
+                Err(e) => reasons.push(format!("S2(LZ4 body): {e}")),
             }
         }
-    }
 
-    // Strategy 3: DDS with per-mip on-disk sizes in reserved area (offset 0x20)
-    if orig_size > data.len() {
-        if let Ok(result) = try_decompress_type1_dds_per_mip_sizes(data, orig_size) {
-            if result.len() >= orig_size {
-                return Ok(result[..orig_size].to_vec());
+        // Strategy 3: per-mip on-disk sizes in DDS reserved area (offset 0x20)
+        if orig_size > data.len() {
+            match try_decompress_type1_dds_per_mip_sizes(data, orig_size) {
+                Ok(r) if r.len() >= orig_size => return Ok(r[..orig_size].to_vec()),
+                Ok(r) => reasons.push(format!("S3(per-mip sizes): undersized output {} < {orig_size}", r.len())),
+                Err(e) => reasons.push(format!("S3(per-mip sizes): {e}")),
             }
         }
-    }
 
-    // Strategy 4: DDS with LZ4 first mip + raw mip tail
-    if orig_size > data.len() {
-        if let Ok(result) = try_decompress_type1_dds_first_mip_lz4_tail(data, orig_size) {
-            if result.len() >= orig_size {
-                return Ok(result[..orig_size].to_vec());
+        // Strategy 4: LZ4 first mip + raw mip tail
+        if orig_size > data.len() {
+            match try_decompress_type1_dds_first_mip_lz4_tail(data, orig_size) {
+                Ok(r) if r.len() >= orig_size => return Ok(r[..orig_size].to_vec()),
+                Ok(r) => reasons.push(format!("S4(LZ4 head + raw tail): undersized output {} < {orig_size}", r.len())),
+                Err(e) => reasons.push(format!("S4(LZ4 head + raw tail): {e}")),
             }
         }
+
+        return Err(ParseError::Compression(format!(
+            "type-1 DDS decompression failed for input {} -> {orig_size} bytes; tried: [{}]",
+            data.len(),
+            reasons.join("; "),
+        )));
     }
 
-    // Fallback: return raw data (caller handles partial decode)
+    // PAR magic without DDS context is ambiguous: a DDS-PAR container expands
+    // via Strategy 1 to a full DDS file; a mesh-PAR file (PAM, PAC) shares
+    // the magic but has a different internal layout that the mesh parser
+    // expands itself.  Try Strategy 1 -- if it produces something that ends
+    // up DDS-shaped, accept it; otherwise treat the file as raw and let the
+    // format parser take over.
+    let has_par_magic = data.len() >= 4 && &data[..4] == b"PAR ";
+    if has_par_magic {
+        if let Ok(r) = try_decompress_type1_par(data) {
+            if r.len() >= orig_size {
+                return Ok(r[..orig_size].to_vec());
+            }
+        }
+        // Fall through: PAR-magic file that isn't a DDS-PAR container.
+    }
+
+    // Non-DDS file with comp_type=1 (typically PAM/PAMLOD/PAC where the PAMT
+    // flag is set but the file is stored raw at the PAZ layer; the format
+    // parser handles internal LZ4 chunks).  Return the raw bytes and log so
+    // the situation is visible -- we make no false claim about decompressing.
+    warn!(
+        "type-1: input magic {:?} not a DDS container (input {} bytes, PAMT orig_size {orig_size}); returning raw, format parser handles internal compression",
+        &data[..4.min(data.len())], data.len()
+    );
     Ok(data.to_vec())
 }
 
@@ -169,8 +218,10 @@ fn parse_dds_mip_info(data: &[u8]) -> Option<DdsMipInfo> {
     let fourcc    = &data[84..88];
     let bpp       = u32::from_le_bytes(data[88..92].try_into().unwrap()) as usize;
 
-    const DDPF_FOURCC: u32 = 0x4;
-    const DDPF_RGB: u32    = 0x40;
+    const DDPF_FOURCC:    u32 = 0x4;
+    const DDPF_RGB:       u32 = 0x40;
+    const DDPF_LUMINANCE: u32 = 0x20000;
+    const DDPF_ALPHA:     u32 = 0x2;
 
     let (data_offset, bytes_per_block, bpp_out) = if pf_flags & DDPF_FOURCC != 0 {
         let (off, bpb, bpp_dx) = match fourcc {
@@ -198,6 +249,12 @@ fn parse_dds_mip_info(data: &[u8]) -> Option<DdsMipInfo> {
         };
         (off, bpb, bpp_dx)
     } else if pf_flags & DDPF_RGB != 0 {
+        (128, 0, bpp)
+    } else if pf_flags & (DDPF_LUMINANCE | DDPF_ALPHA) != 0 {
+        // Single-channel grayscale or alpha-only.  bpp comes straight from the
+        // header (typically 8 or 16).  Used by signed-distance-field worldmap
+        // tiles in /cd (e.g. ui/cd_worldmap_*_sdf_*.dds).
+        if bpp == 0 { return None; }
         (128, 0, bpp)
     } else {
         return None;

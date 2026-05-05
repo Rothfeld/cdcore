@@ -20,7 +20,7 @@
 //!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
 use log::warn;
-use cdcore::formats::dds::{decode_dds_to_rgba, encode_dds_matching};
+use cdcore::formats::image::dds::{classify_dds, decode_dds_to_rgba, encode_dds_matching, DdsShape};
 use cdcore::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
 use cdcore::formats::scene::parse_prefab;
 use cdcore::formats::animation::parse_paa_metabin;
@@ -263,7 +263,21 @@ pub fn render_nav(data: &[u8], path: &str) -> Option<Vec<u8>> {
 }
 
 /// Decode a DDS texture and return PNG bytes (RGBA8).
+///
+/// Renders only the top 2D surface.  Refuses cubemap / volume / array DDS
+/// because those carry data beyond the top 2D image that a single-PNG
+/// round-trip cannot represent.  Mipmapped is allowed: lower mips drop on
+/// write-back, which the game tolerates (samples at top mip when finer ones
+/// are absent -- acceptable quality loss, no crash).
 pub fn render_dds_png(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    match classify_dds(data) {
+        Ok(shape) if shape.is_2d_round_trippable() => {}
+        Ok(shape) => {
+            warn!("render_dds_png {path}: refusing {shape:?} DDS -- PNG view cannot represent it without loss");
+            return None;
+        }
+        Err(e) => { warn!("render_dds_png {path}: classify: {e}"); return None; }
+    }
     let (width, height, rgba) = decode_dds_to_rgba(data)
         .map_err(|e| warn!("render_dds_png {path}: {e}")).ok()?;
 
@@ -285,6 +299,17 @@ pub fn render_dds_png(data: &[u8], path: &str) -> Option<Vec<u8>> {
 /// RGBA, then re-encodes using image-dds so the output has the same pixel
 /// format (BC7, BC1, RGBA8, etc.) as the source file.
 pub fn parse_png_to_dds(png_data: &[u8], original_dds_data: &[u8], path: &str) -> Option<Vec<u8>> {
+    match classify_dds(original_dds_data) {
+        Ok(DdsShape::Simple2d) => {}
+        Ok(DdsShape::Mipmapped) => {
+            warn!("parse_png_to_dds {path}: original was mip-chained; write-back drops lower mips (game samples top mip at distance)");
+        }
+        Ok(shape) => {
+            warn!("parse_png_to_dds {path}: refusing write-back to {shape:?} DDS -- one PNG cannot represent it");
+            return None;
+        }
+        Err(e) => { warn!("parse_png_to_dds {path}: classify: {e}"); return None; }
+    }
     let decoder = png::Decoder::new(png_data);
     let mut reader = decoder.read_info()
         .map_err(|e| warn!("parse_png_to_dds {path}: PNG read_info: {e}")).ok()?;

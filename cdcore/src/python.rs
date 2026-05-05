@@ -836,7 +836,7 @@ fn verify_chain(pamt_path: &str, papgt_path: &str) -> PyResult<bool> {
 #[gen_stub_pyfunction]
 #[pyfunction]
 fn decode_dds_to_rgba(py: Python<'_>, data: Vec<u8>) -> PyResult<(u32, u32, Py<PyBytes>)> {
-    let (w, h, rgba) = crate::formats::dds::decode_dds_to_rgba(&data).map_err(to_pyerr)?;
+    let (w, h, rgba) = crate::formats::image::dds::decode_dds_to_rgba(&data).map_err(to_pyerr)?;
     Ok((w, h, PyBytes::new(py, &rgba).unbind()))
 }
 

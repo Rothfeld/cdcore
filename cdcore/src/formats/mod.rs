@@ -1,7 +1,7 @@
 pub mod animation;
 pub mod audio;
 pub mod data;
-pub mod dds;
+pub mod image;
 pub mod mesh;
 pub mod pabc;
 pub mod pabc_skin;

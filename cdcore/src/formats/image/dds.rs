@@ -672,6 +672,65 @@ fn decode_r32f(src: &[u8], width: u32, height: u32) -> Vec<u8> {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Surface shape classification.  Used by the `.dds.png/` virtual view to
+/// refuse formats whose round-trip through a single PNG would lose data
+/// (cubemap faces, volume slices, array layers, mip chains).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DdsShape {
+    Simple2d,
+    Cubemap,
+    Volume,
+    Array,
+    Mipmapped,
+}
+
+impl DdsShape {
+    pub fn is_simple_2d(self) -> bool { matches!(self, DdsShape::Simple2d) }
+
+    /// True for shapes where the top 2D surface fully represents the file's
+    /// renderable content: Simple2d (one mip) or Mipmapped (top mip).
+    /// A round-trip through one PNG drops lower mips for the latter, but the
+    /// game tolerates the loss (samples at top mip when finer ones are absent).
+    /// False for Cubemap/Volume/Array — those carry surfaces beyond the top
+    /// 2D image and lose data unrecoverably.
+    pub fn is_2d_round_trippable(self) -> bool {
+        matches!(self, DdsShape::Simple2d | DdsShape::Mipmapped)
+    }
+}
+
+/// Inspect a DDS header and report its surface shape.  Cheap: only reads the
+/// 128-byte legacy header plus, if present, the 20-byte DX10 extension.
+pub fn classify_dds(data: &[u8]) -> Result<DdsShape> {
+    if data.len() < 128 || &data[..4] != DDS_MAGIC {
+        return Err(ParseError::Other("not a DDS file".into()));
+    }
+    let mip_count = read_u32_le(data, 28);
+    let caps2     = read_u32_le(data, 112);
+
+    const DDSCAPS2_CUBEMAP: u32 = 0x0000_0200;
+    const DDSCAPS2_VOLUME:  u32 = 0x0020_0000;
+
+    if caps2 & DDSCAPS2_CUBEMAP != 0 { return Ok(DdsShape::Cubemap); }
+    if caps2 & DDSCAPS2_VOLUME  != 0 { return Ok(DdsShape::Volume);  }
+
+    // DX10 extended header (FourCC = "DX10") sits at offset 128, 20 bytes long.
+    let pf_flags = read_u32_le(data, 80);
+    let fourcc   = &data[84..88];
+    if pf_flags & DDPF_FOURCC != 0 && fourcc == b"DX10" && data.len() >= 148 {
+        let resource_dim = read_u32_le(data, 128 + 4);
+        let misc_flag    = read_u32_le(data, 128 + 8);
+        let array_size   = read_u32_le(data, 128 + 12);
+        const D3D10_RESOURCE_DIMENSION_TEXTURE3D: u32 = 4;
+        const D3D10_RESOURCE_MISC_TEXTURECUBE:    u32 = 0x4;
+        if misc_flag & D3D10_RESOURCE_MISC_TEXTURECUBE != 0 { return Ok(DdsShape::Cubemap); }
+        if resource_dim == D3D10_RESOURCE_DIMENSION_TEXTURE3D { return Ok(DdsShape::Volume); }
+        if array_size > 1 { return Ok(DdsShape::Array); }
+    }
+
+    if mip_count > 1 { return Ok(DdsShape::Mipmapped); }
+    Ok(DdsShape::Simple2d)
+}
+
 /// Decode the first mip level of a DDS file to raw RGBA bytes.
 /// Returns (width, height, rgba_bytes).
 pub fn decode_dds_to_rgba(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
