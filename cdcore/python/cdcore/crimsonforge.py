@@ -168,23 +168,38 @@ def install() -> None:
 
     Runs automatically when this module is first imported; exposed so
     test harnesses can call it explicitly.  Idempotent.
+
+    Prints a one-line confirmation to stderr so the activation is
+    visible in the console.
     """
     global _INSTALLED
     if _INSTALLED:
         return
 
+    patched = []
     if "core.vfs_manager" not in sys.modules:
         mod = types.ModuleType("core.vfs_manager")
         mod.VfsManager = _RustVfsManager
         sys.modules["core.vfs_manager"] = mod
+        patched.append("core.vfs_manager")
 
     if "core.dds_reader" not in sys.modules:
         sys.modules["core.dds_reader"] = _DdsProxy("core.dds_reader")
+        patched.append("core.dds_reader")
 
     if "core.mesh_parser" not in sys.modules:
         sys.modules["core.mesh_parser"] = _MeshParserProxy("core.mesh_parser")
+        patched.append("core.mesh_parser")
 
     _INSTALLED = True
+
+    import os
+    if patched:
+        from . import __version__
+        print(
+            f"cdcore.crimsonforge {__version__}: shimmed {', '.join(patched)}",
+            file=sys.stderr,
+        )
 
 
 # Importing this module is the signal to install -- the module name
