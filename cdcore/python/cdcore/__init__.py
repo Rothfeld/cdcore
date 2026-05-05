@@ -1,160 +1,19 @@
+"""Rust-backed building blocks for the Crimson Desert toolchain.
+
+This module re-exports every type, parser, and helper compiled by the
+``cdcore`` Rust crate.  It deliberately has *no* import-time side
+effects: nothing in ``sys.modules`` is mutated, no other package's
+attributes are patched.  Importing this library is now boring, the way
+a library import should be.
+
+Projects that want the ``core.vfs_manager`` / ``core.dds_reader`` /
+``core.mesh_parser`` drop-in replacements opt in with a single
+side-effect import in their entry point:
+
+    import cdcore.crimsonforge   # noqa: F401
+
+Do this before any ``from core.X import ...`` statement runs.  See
+:mod:`cdcore.crimsonforge` for what the shim covers.
+"""
 from .cdcore import *
 from .cdcore import __version__
-
-import sys
-import types
-from pathlib import Path
-
-
-class _RustVfsManager:
-    """VfsProtocol-conforming wrapper around the Rust VfsManager.
-
-    Injected into sys.modules as core.vfs_manager so every existing
-    'from core.vfs_manager import VfsManager' gets the Rust backend
-    without any changes to the Python project.
-
-    Unknown attributes fall through to a lazily-loaded instance of the
-    original Python VfsManager so newer CrimsonForge code that calls
-    methods not yet implemented here keeps working.
-    """
-
-    def __init__(self, packages_path):
-        from .cdcore import VfsManager as _RustVM
-        self._packages_path = Path(packages_path)
-        self._rust = _RustVM(str(self._packages_path))
-        self._py_fallback = None
-
-    def _get_fallback(self):
-        if self._py_fallback is None:
-            sys.modules.pop("core.vfs_manager", None)
-            import importlib
-            _real_mod = importlib.import_module("core.vfs_manager")
-            self._py_fallback = _real_mod.VfsManager(str(self._packages_path))
-            sys.modules["core.vfs_manager"] = sys.modules.get("cdcore.vfs_shim", self)
-        return self._py_fallback
-
-    def __getattr__(self, name):
-        if name.startswith("_"):
-            raise AttributeError(name)
-        import warnings
-        warnings.warn(
-            f"cdcore._RustVfsManager: '{name}' not implemented, falling back to Python",
-            stacklevel=2,
-        )
-        return getattr(self._get_fallback(), name)
-
-    def load_pamt(self, group_dir: str):
-        self._rust.load_group(group_dir)
-        return self._rust.get_pamt(group_dir)
-
-    def list_package_groups(self) -> list:
-        return self._rust.list_groups()
-
-    def get_pamt(self, group_dir: str):
-        return self._rust.get_pamt(group_dir)
-
-    def invalidate_pamt_cache(self, group_dir: str):
-        self._rust.invalidate_group(group_dir)
-
-    def reload(self) -> None:
-        self._rust.reload()
-
-    def read_entry_data(self, entry) -> bytes:
-        return self._rust.read_entry(entry)
-
-    def extract_entry(self, entry, output_dir: str) -> dict:
-        data = self._rust.read_entry(entry)
-        rel = entry.path.replace("\\", "/").lstrip("/")
-        dest = Path(output_dir) / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
-        return {"path": str(dest), "size": len(data)}
-
-    @property
-    def packages_path(self) -> str:
-        return str(self._packages_path)
-
-    @property
-    def papgt_path(self) -> str:
-        return str(self._packages_path / "meta" / "0.papgt")
-
-
-def _rust_decode_dds_to_rgba(data: bytes):
-    from .cdcore import decode_dds_to_rgba
-    return decode_dds_to_rgba(data)
-
-
-class _DdsProxy(types.ModuleType):
-    """Proxy for core.dds_reader that replaces decode_dds_to_rgba with
-    the Rust implementation while delegating all other attributes to the
-    real Python module loaded from disk."""
-
-    _real = None
-
-    def _load_real(self):
-        if self._real is None:
-            sys.modules.pop("core.dds_reader", None)
-            import importlib
-            self._real = importlib.import_module("core.dds_reader")
-            sys.modules["core.dds_reader"] = self
-        return self._real
-
-    def __getattr__(self, name):
-        if name == "decode_dds_to_rgba":
-            return _rust_decode_dds_to_rgba
-        return getattr(self._load_real(), name)
-
-
-class _MeshParserProxy(types.ModuleType):
-    """Proxy for core.mesh_parser that replaces parse_pam and parse_pamlod
-    with Rust implementations (30-70x faster) while delegating every other
-    attribute to the real Python module.
-
-    Patching the real module's globals on first load means that internal
-    calls such as parse_mesh -> parse_pam also use the Rust path.
-    """
-
-    _real = None
-
-    def _load_real(self):
-        if self._real is None:
-            sys.modules.pop("core.mesh_parser", None)
-            import importlib
-            self._real = importlib.import_module("core.mesh_parser")
-            sys.modules["core.mesh_parser"] = self
-            # Patch the real module's globals so that parse_mesh() and any
-            # other helper that calls parse_pam/parse_pamlod by name goes
-            # through Rust as well.
-            from .cdcore import parse_pam as _rs_pam, parse_pamlod as _rs_pamlod
-            self._real.parse_pam    = _rs_pam
-            self._real.parse_pamlod = _rs_pamlod
-        return self._real
-
-    def __getattr__(self, name):
-        if name == "parse_pam":
-            from .cdcore import parse_pam
-            return parse_pam
-        if name == "parse_pamlod":
-            from .cdcore import parse_pamlod
-            return parse_pamlod
-        return getattr(self._load_real(), name)
-
-
-# Inject core.vfs_manager -- any 'from core.vfs_manager import VfsManager'
-# gets _RustVfsManager without the Python project needing to know.
-if "core.vfs_manager" not in sys.modules:
-    _vfs_mod = types.ModuleType("core.vfs_manager")
-    _vfs_mod.VfsManager = _RustVfsManager
-    sys.modules["core.vfs_manager"] = _vfs_mod
-
-# Inject core.dds_reader -- decode_dds_to_rgba is backed by Rust; all
-# other attributes (read_dds_info, validate_dds_payload_size, etc.)
-# fall through to the real Python module on first access.
-if "core.dds_reader" not in sys.modules:
-    sys.modules["core.dds_reader"] = _DdsProxy("core.dds_reader")
-
-# Inject core.mesh_parser -- parse_pam and parse_pamlod are backed by Rust;
-# everything else (parse_pac, ParsedMesh, SubMesh, _flatten_parsed_mesh_for_preview,
-# is_mesh_file, etc.) falls through to the real Python module on first access.
-if "core.mesh_parser" not in sys.modules:
-    sys.modules["core.mesh_parser"] = _MeshParserProxy("core.mesh_parser")
