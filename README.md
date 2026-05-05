@@ -13,7 +13,7 @@ build.cmd       # Windows
 pip install --force-reinstall cdcore/target/wheels/*.whl
 ```
 
-Companion tooling for the excellent [CrimsonForge](https://github.com/hzeemr/crimsonforge).
+Based on the excellent [CrimsonForge](https://github.com/hzeemr/crimsonforge).
 Archive formats, crypto, compression, mesh parsers, FBX export logic,
 and virtual file designs derived from CrimsonForge's Python implementation.
 
