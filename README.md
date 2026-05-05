@@ -55,7 +55,7 @@ import cdcore.crimsonforge  # noqa: F401  (installs Rust shims for core.*)
 ### `cdfuse` (Linux) / `cdwinfs` (Windows)
 
 Mounts Crimson Desert archives as a filesystem. Decrypts and decompresses on access.
-Read-write: edits repack to PAZ on close. Use `--no-auto-repack` + `[s]` to flush manually.
+Read-write: edits repack to PAZ on close.
 
 
 | Crate | Platform | Driver | License | Requirement |
@@ -63,9 +63,7 @@ Read-write: edits repack to PAZ on close. Use `--no-auto-repack` + `[s]` to flus
 | `cdfuse` | Linux | FUSE via `fuser` | MIT | `libfuse3`, `user_allow_other` in `/etc/fuse.conf` |
 | `cdwinfs` | Windows | [WinFsp](https://winfsp.dev/rel/) | GPL-3.0 | WinFsp 2.x installed |
 
-`cdwinfs` is GPL-3.0 because `winfsp-rs` (the Rust WinFSP bindings) declares
-GPL-3.0. The underlying WinFSP driver has a FLOSS exception; replacing the
-binding crate with hand-generated bindgen output would allow relicensing to MIT.
+`cdwinfs` is GPL-3.0 because `winfsp-rs` (the Rust WinFSP bindings) declares GPL-3.0. 
 <details>
 <summary>Architecture diagram</summary>
 
