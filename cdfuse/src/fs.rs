@@ -113,6 +113,21 @@ fn png_crc32(data: &[u8]) -> u32 {
 
 // -- Inode helpers -------------------------------------------------------------
 
+// `[HH:MM:SS]` UTC for TUI event log lines.  Matches cdwinfs so the two side-by-side
+// look uniform; UTC keeps things free of TZ deps and the label is short enough that
+// local-vs-UTC ambiguity isn't a concern.
+fn event_timestamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let day_secs = secs % 86_400;
+    let h = day_secs / 3600;
+    let m = (day_secs / 60) % 60;
+    let s = day_secs % 60;
+    format!("[{h:02}:{m:02}:{s:02}]")
+}
+
 fn ino_for(path: &str) -> u64 {
     if path.is_empty() { return ROOT_INO; }
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -165,7 +180,7 @@ impl SharedFs {
         let gid = unsafe { libc::getgid() };
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
-        let repack_engine = RepackEngine::new(&packages_path, None);
+        let repack_engine = RepackEngine::new(&packages_path);
         let decode_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))
             .thread_name(|i| format!("cdfuse-decode-{i}"))
@@ -198,7 +213,7 @@ impl SharedFs {
     pub fn push_event(&self, msg: String) {
         let mut q = self.recent_events.lock().unwrap();
         if q.len() >= 10 { q.pop_front(); }
-        q.push_back(msg);
+        q.push_back(format!("{} {msg}", event_timestamp()));
     }
 
     pub fn recent_events(&self) -> Vec<String> {
@@ -675,7 +690,7 @@ impl SharedFs {
         };
         self.cache_put(ino_for(path), Arc::from(data.clone()));
         let mf = ModifiedFile { data, entry: entry.clone(), pamt_data, package_group: group_dir.clone() };
-        match self.repack_engine.repack(vec![mf], &self.papgt_path, true) {
+        match self.repack_engine.repack(vec![mf], &self.papgt_path) {
             Ok(r) if r.success => {
                 info!("repack {path}: ok");
                 self.push_event(format!("[ok]  repacked {path}"));
@@ -876,9 +891,12 @@ impl Filesystem for CdFs {
                     });
                 self.shared.write_overlay.lock().unwrap().entry(path.clone()).or_insert(seed);
             }
-            let mut overlay = self.shared.write_overlay.lock().unwrap();
-            let buf = overlay.get_mut(&path).unwrap();
-            buf.resize(new_size as usize, 0);
+            {
+                let mut overlay = self.shared.write_overlay.lock().unwrap();
+                let buf = overlay.get_mut(&path).unwrap();
+                buf.resize(new_size as usize, 0);
+            }
+            self.shared.write_mtimes.lock().unwrap().insert(path.clone(), SystemTime::now());
             let attr = self.shared.file_attr(ino, &path, new_size);
             reply.attr(&Duration::ZERO, &attr);
         } else {
@@ -942,7 +960,12 @@ impl Filesystem for CdFs {
         };
         let child = SharedFs::child_path(&parent_path, name);
         let ino = self.ensure_path(&child, false);
+        let now = SystemTime::now();
         self.shared.write_overlay.lock().unwrap().entry(child.clone()).or_insert_with(Vec::new);
+        self.shared.pending_paths.lock().unwrap().insert(child.clone());
+        self.shared.write_mtimes.lock().unwrap().insert(child.clone(), now);
+        // Invalidate parent dir cache so the new file shows up in the next readdir.
+        self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
         let attr = self.shared.file_attr(ino, &child, 0);
         reply.created(&Duration::ZERO, &attr, 0, 0, fuser::consts::FOPEN_DIRECT_IO);
     }
