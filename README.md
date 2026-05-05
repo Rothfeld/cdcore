@@ -125,6 +125,7 @@ cdfuse --licenses                  # print third-party dependency licenses
 **Virtual views:**
 
 Hidden root directories expose binary files in more usable formats:
+(for now, most of these are read-only)
 
 ```
 .paloc.jsonl/gamedata/localizationstring_eng.paloc.jsonl   (localisation text)
