@@ -162,7 +162,7 @@ fn main() {
     let mut host = winfsp::host::FileSystemHost::new(volume_params, cdfs)
         .unwrap_or_else(|e| { eprintln!("create host: {e}"); std::process::exit(1); });
 
-    let mount_point = format!("{mount}:");
+    let mount_point = format!("{}:", mount.trim_end_matches(':'));
     host.mount(&mount_point)
         .unwrap_or_else(|e| { eprintln!("mount {mount}: {e}"); std::process::exit(1); });
 

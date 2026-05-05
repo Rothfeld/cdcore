@@ -30,7 +30,7 @@ use log::{info, warn};
 use lru::LruCache;
 use memmap2::Mmap;
 use winfsp::filesystem::{
-    DirBuffer, DirInfo, DirMarker, FileSecurity, FileInfo,
+    DirInfo, DirMarker, FileSecurity, FileInfo,
     FileSystemContext, OpenFileInfo, VolumeInfo, WideNameInfo,
 };
 use winfsp::{FspError, Result, U16CStr};
@@ -55,7 +55,6 @@ const FSP_CLEANUP_DELETE: u32 = 0x01;
 // NTSTATUS codes (raw i32 -- avoids pulling windows crate into this file)
 const NTSTATUS_NOT_FOUND:  i32 = 0xC0000034u32 as i32; // STATUS_OBJECT_NAME_NOT_FOUND
 const NTSTATUS_WRITE_PROT: i32 = 0xC00000A2u32 as i32; // STATUS_MEDIA_WRITE_PROTECTED
-const NTSTATUS_INSUF_RES:  i32 = 0xC000009Au32 as i32; // STATUS_INSUFFICIENT_RESOURCES
 const NTSTATUS_IO_ERR:     i32 = 0xC0000185u32 as i32; // STATUS_IO_DEVICE_ERROR
 
 // ---- helpers -----------------------------------------------------------------
@@ -98,12 +97,28 @@ pub struct FileCtx {
     pub path:       String,
     pub is_dir:     bool,
     delete_pending: AtomicBool,
-    pub dir_buffer: DirBuffer,
+    /// Sorted child list, populated on first read_directory call.
+    /// We bypass winfsp's DirBuffer because for very large dirs (200K+ entries)
+    /// it returns the marker entry itself once enumeration reaches the last
+    /// entry, causing the kernel to loop forever instead of seeing EOF.
+    dir_entries: OnceLock<Vec<DirEntry>>,
+}
+
+/// One direct child of a directory: name + cached FileInfo.  Sorted by `name`
+/// (UTF-8 byte order, which matches WinFSP's case-sensitive wide compare for
+/// the ASCII filenames used in the game data).
+struct DirEntry {
+    name:      String,
+    file_info: FileInfo,
 }
 
 impl FileCtx {
     fn new(path: String, is_dir: bool) -> Self {
-        FileCtx { path, is_dir, delete_pending: AtomicBool::new(false), dir_buffer: DirBuffer::new() }
+        FileCtx {
+            path, is_dir,
+            delete_pending: AtomicBool::new(false),
+            dir_entries: OnceLock::new(),
+        }
     }
 }
 
@@ -229,9 +244,27 @@ impl SharedFs {
     }
 
     fn file_size_for(&self, path: &str) -> u64 {
-        self.write_overlay.lock().unwrap().get(path).map(|d| d.len() as u64)
-            .or_else(|| self.vfs.lookup(path).map(|e| e.orig_size as u64))
-            .unwrap_or(0)
+        if let Some(d) = self.write_overlay.lock().unwrap().get(path) {
+            return d.len() as u64;
+        }
+        // Decoded/rendered size wins over source size: virtual files (.dds.png,
+        // .wem.ogg, etc.) are populated into the cache by `open`, so reads see
+        // the rendered length rather than the source's orig_size.
+        if let Some(d) = self.cache_get(ino_for(path)) {
+            return d.len() as u64;
+        }
+        if let Some(e) = self.vfs.lookup(path) {
+            return e.orig_size as u64;
+        }
+        // Virtual file whose source exists but we haven't decoded yet: report
+        // the source size as a placeholder.  `open` triggers a decode, so by
+        // the time the kernel actually reads, the cache_get above hits.
+        if let Some(vf) = virtual_files::resolve(path) {
+            if let Some(e) = self.vfs.lookup(&vf.source_path) {
+                return e.orig_size as u64;
+            }
+        }
+        0
     }
 
     // -- mmap pool -------------------------------------------------------------
@@ -470,23 +503,14 @@ impl SharedFs {
         }
     }
 
-    // -- directory population --------------------------------------------------
-    // Fills a DirBufferLock with entries.  Called with reset=true once per
-    // "readdir session"; DirBuffer caches entries for subsequent paginated calls.
+    // -- directory enumeration -------------------------------------------------
+    // Build a sorted Vec<DirEntry> for a directory.  Called once per open handle,
+    // cached in FileCtx.dir_entries; subsequent paginated reads index into it.
 
-    fn populate_dir(&self, lock: &winfsp::filesystem::DirBufferLock<'_>, path: &str) {
-        macro_rules! add {
-            ($name:expr, $fi:expr) => {{
-                let mut di: DirInfo = DirInfo::new();
-                if di.set_name($name).is_ok() {
-                    *di.file_info_mut() = $fi;
-                    if lock.write(&mut di).is_err() { return; }
-                }
-            }};
-        }
-
-        add!(".",  self.dir_info(path));
-        add!("..", self.dir_info(parent_path(path)));
+    fn build_dir_entries(&self, path: &str) -> Vec<DirEntry> {
+        let mut out: Vec<DirEntry> = Vec::new();
+        out.push(DirEntry { name: ".".into(),  file_info: self.dir_info(path) });
+        out.push(DirEntry { name: "..".into(), file_info: self.dir_info(parent_path(path)) });
 
         // Virtual root directories appear only at the filesystem root.
         if path.is_empty() {
@@ -494,49 +518,49 @@ impl SharedFs {
                 if virtual_files::root_requires_vgmstream(vdir_name) {
                     continue;
                 }
-                add!(vdir_name, self.dir_info(vdir_name));
+                out.push(DirEntry {
+                    name:      vdir_name.to_string(),
+                    file_info: self.dir_info(vdir_name),
+                });
             }
         }
 
-        // If this is a virtual directory, list its contents and return.
         if let Some(vdir) = virtual_files::resolve_virtual_dir(path) {
-            self.populate_virtual_dir(lock, path, &vdir);
-            return;
+            self.append_virtual_dir(&mut out, path, &vdir);
+        } else {
+            // Regular VFS children.
+            let children = self.vfs.list_dir_with_sizes_unsorted(path);
+            for (name, is_dir, orig_size) in children {
+                let cpath = child_path(path, &name);
+                let fi = if is_dir {
+                    self.dir_info(&cpath)
+                } else {
+                    let size = self.write_overlay.lock().unwrap()
+                        .get(&cpath).map(|d| d.len() as u64)
+                        .unwrap_or(orig_size as u64);
+                    self.file_info(&cpath, size)
+                };
+                out.push(DirEntry { name, file_info: fi });
+            }
         }
 
-        // Regular VFS children.
-        let children = self.vfs.list_dir_with_sizes_unsorted(path);
-        for (name, is_dir, orig_size) in &children {
-            let cpath = child_path(path, name);
-            let fi = if *is_dir {
-                self.dir_info(&cpath)
-            } else {
-                let size = self.write_overlay.lock().unwrap()
-                    .get(&cpath).map(|d| d.len() as u64)
-                    .unwrap_or(*orig_size as u64);
-                self.file_info(&cpath, size)
-            };
-            add!(name.as_str(), fi);
-        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
-    fn populate_virtual_dir(
+    fn append_virtual_dir(
         &self,
-        lock: &winfsp::filesystem::DirBufferLock<'_>,
+        out:   &mut Vec<DirEntry>,
         vpath: &str,
-        vdir: &virtual_files::VirtualDirInfo,
+        vdir:  &virtual_files::VirtualDirInfo,
     ) {
         let children = self.vfs.list_dir_with_sizes_unsorted(&vdir.real_path);
-        for (name, is_dir, orig_size) in &children {
-            if *is_dir {
-                let real_child = child_path(&vdir.real_path, name);
+        for (name, is_dir, orig_size) in children {
+            if is_dir {
+                let real_child = child_path(&vdir.real_path, &name);
                 if !self.vfs.subtree_has_ext(&real_child, vdir.filter_ext) { continue; }
-                let cvpath = child_path(vpath, name);
-                let mut di: DirInfo = DirInfo::new();
-                if di.set_name(name.as_str()).is_ok() {
-                    *di.file_info_mut() = self.dir_info(&cvpath);
-                    if lock.write(&mut di).is_err() { return; }
-                }
+                let cvpath = child_path(vpath, &name);
+                out.push(DirEntry { name, file_info: self.dir_info(&cvpath) });
             } else if name.ends_with(vdir.filter_ext) {
                 let should_add = if vdir.filter_ext == ".pabgb" {
                     name.strip_suffix(".pabgb").is_some_and(|base| {
@@ -548,19 +572,17 @@ impl SharedFs {
                 };
                 if !should_add { continue; }
                 let virt_name = if vdir.suffix.is_empty() {
-                    name.clone()
+                    name
                 } else {
                     format!("{name}{}", vdir.suffix)
                 };
                 let cvpath = child_path(vpath, &virt_name);
-                let mut di: DirInfo = DirInfo::new();
-                if di.set_name(virt_name.as_str()).is_ok() {
-                    *di.file_info_mut() = self.file_info(&cvpath, *orig_size as u64);
-                    if lock.write(&mut di).is_err() { return; }
-                }
+                let fi = self.file_info(&cvpath, orig_size as u64);
+                out.push(DirEntry { name: virt_name, file_info: fi });
             }
         }
     }
+
 }
 
 // ---- CdWinFs -- thin wrapper, implements FileSystemContext -------------------
@@ -642,13 +664,26 @@ impl FileSystemContext for CdWinFs {
         file_info: &mut OpenFileInfo,
     ) -> Result<Self::FileContext> {
         let path = vfs_path(file_name);
-        match self.lookup(&path) {
-            Some((fi, is_dir)) => {
-                *file_info.as_mut() = fi;
-                Ok(FileCtx::new(path, is_dir))
+        let (mut fi, is_dir) = match self.lookup(&path) {
+            Some(x)  => x,
+            None     => return Err(FspError::NTSTATUS(NTSTATUS_NOT_FOUND)),
+        };
+
+        // For virtual files (e.g. .dds.png/foo.dds.png) the rendered output
+        // size differs from the source DDS/WEM/PAM size that lookup() falls
+        // back to.  Decode now so OpenFileInfo carries the actual byte length;
+        // without this, Explorer reads up to the placeholder size and gets a
+        // truncated PNG -- the "half-loaded thumbnails" symptom.  decode() is
+        // cached so subsequent opens are free.
+        if !is_dir && virtual_files::resolve(&path).is_some() {
+            let ino = ino_for(&path);
+            if let Some(data) = self.0.decode(ino, &path) {
+                fi = self.0.file_info(&path, data.len() as u64);
             }
-            None => Err(FspError::NTSTATUS(NTSTATUS_NOT_FOUND)),
         }
+
+        *file_info.as_mut() = fi;
+        Ok(FileCtx::new(path, is_dir))
     }
 
     fn close(&self, context: Self::FileContext) {
@@ -896,16 +931,41 @@ impl FileSystemContext for CdWinFs {
         marker: DirMarker<'_>,
         buffer: &mut [u8],
     ) -> Result<u32> {
-        let reset = marker.is_none();
-        {
-            let lock = context.dir_buffer.acquire(reset, None)
-                .map_err(|_| FspError::NTSTATUS(NTSTATUS_INSUF_RES))?;
-            if reset {
-                self.0.populate_dir(&lock, &context.path);
+        // Build the sorted entry list once per open handle.  Subsequent paginated
+        // calls index into the cached Vec.  We deliberately do NOT use winfsp's
+        // DirBuffer: for >50K entries it returns the marker entry itself once
+        // the kernel reaches the end, which makes Windows loop forever instead
+        // of seeing EOF.  Going through `append_to_buffer` + `finalize_buffer`
+        // keeps us in full control of marker/EOF semantics.
+        let entries = context.dir_entries.get_or_init(|| {
+            self.0.build_dir_entries(&context.path)
+        });
+
+        // Find the first index strictly past the marker.  Marker is the last
+        // filename returned in the previous chunk, so we resume right after it.
+        let start = match marker.inner() {
+            None => 0,
+            Some(slice) => {
+                let mut bytes = slice;
+                while bytes.last() == Some(&0) { bytes = &bytes[..bytes.len() - 1]; }
+                let needle = String::from_utf16_lossy(bytes);
+                entries.partition_point(|e| e.name.as_str() <= needle.as_str())
             }
-            // lock released here
+        };
+
+        let mut cursor = 0u32;
+        for entry in &entries[start..] {
+            let mut di: DirInfo = DirInfo::new();
+            if di.set_name(entry.name.as_str()).is_err() { continue; }
+            *di.file_info_mut() = entry.file_info.clone();
+            if !di.append_to_buffer(buffer, &mut cursor) {
+                // Buffer full -- kernel will call back with the last name as marker.
+                return Ok(cursor);
+            }
         }
-        Ok(context.dir_buffer.read(marker, buffer))
+        // All remaining entries fit; write the EOF terminator.
+        DirInfo::<255>::finalize_buffer(buffer, &mut cursor);
+        Ok(cursor)
     }
 
     fn get_volume_info(&self, out: &mut VolumeInfo) -> Result<()> {

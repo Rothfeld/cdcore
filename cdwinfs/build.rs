@@ -3,6 +3,12 @@
 use std::io::Write;
 
 fn main() {
+    // Emit /DELAYLOAD:winfsp-x64.dll so the binary doesn't fail to load when
+    // WinFSP's bin dir isn't on PATH at process start. Without this, the
+    // registry-PATH workaround in main.rs runs too late — Windows has already
+    // failed with STATUS_DLL_NOT_FOUND before main is reached.
+    winfsp::build::winfsp_link_delayload();
+
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     // cdwinfs has its own THIRD_PARTY_LICENSES.md (includes winfsp deps).
     let src = std::path::Path::new(&manifest).join("THIRD_PARTY_LICENSES.md");

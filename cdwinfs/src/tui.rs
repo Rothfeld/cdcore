@@ -271,8 +271,7 @@ fn config_loop(
             A::Quit => return None,
             A::Mount => {
                 if st.can_mount() {
-                    // Append colon: "Y" -> "Y:" as expected by WinFSP.
-                    return Some((st.game_dir.clone().unwrap(), format!("{}:", st.mount)));
+                    return Some((st.game_dir.clone().unwrap(), st.mount.clone()));
                 }
             }
             A::PickerSelect(dir) => {
