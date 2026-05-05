@@ -194,3 +194,7 @@ and in the cdcore wheel (`THIRD_PARTY_LICENSES.md`).
 - `cdcore` wheel: Python 3.10+, no other native dependencies
 - `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
 - `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed -- the installer registers the DLL path; `cdwinfs.exe` finds it automatically
+
+---
+
+I used  Claude Sonnet 4.6 and Claude Opus 4.7
