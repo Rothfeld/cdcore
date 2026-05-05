@@ -22,10 +22,14 @@ and virtual file designs derived from CrimsonForge's Python implementation.
 ### `cdcore`
 
 Rust library for Python via [PyO3](https://pyo3.rs).
-Drop-in faster backend for CrimsonForge's VFS, DDS reader, and mesh parser:
+Drop-in faster backend for CrimsonForge's VFS, DDS reader, and mesh parser.
+
+`import cdcore` itself has no side effects -- the bare library is just
+the Rust bindings.  Activate the drop-in shim with one explicit
+side-effect import in your entry point, before any `from core.* import ...`:
 
 ```python
-import cdcore  # monkeypatches vfs, dds reader and mesh reader with native implementations
+import cdcore.crimsonforge  # noqa: F401  (installs Rust shims for core.*)
 ```
 
 Injects 3 proxies into `sys.modules`:
