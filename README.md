@@ -21,26 +21,9 @@ and virtual file designs derived from CrimsonForge's Python implementation.
 
 ### `cdcore`
 
-Rust library for Python via [PyO3](https://pyo3.rs).
-Drop-in faster backend for CrimsonForge's VFS, DDS reader, and mesh parser.
-
-`import cdcore` itself has no side effects -- the bare library is just
-the Rust bindings.  Activate the drop-in shim with one explicit
-side-effect import in your entry point, before any `from core.* import ...`:
-
-```python
-import cdcore.crimsonforge  # noqa: F401  (installs Rust shims for core.*)
-```
-
-Injects 3 proxies into `sys.modules`:
-
-- `core.vfs_manager.VfsManager` -> Rust VFS (PAPGT + PAMT + PAZ, parallel load, LRU cache)
-- `core.dds_reader.decode_dds_to_rgba` -> Rust DDS decoder (BC1-BC7, BC6H, float variants)
-- `core.mesh_parser.parse_pam` / `parse_pamlod` -> Rust mesh parsers (30--70x faster)
-
-Other attributes fall through to Python. No other code changes needed.
-
-Also exposes Rust API directly:
+Rust library for Python via [PyO3](https://pyo3.rs).  Ships the file-format
+parsers, crypto, compression, VFS, mesh / FBX, and DDS pipelines used by
+the rest of the toolchain, exposed as a Python module.
 
 ```python
 import cdcore
@@ -58,6 +41,13 @@ width, height, rgba = cdcore.decode_dds_to_rgba(data)
 mesh = cdcore.parse_pam(data, "object/foo.pam")
 for sub in mesh.submeshes:
     print(sub.name, len(sub.vertices), "verts")
+```
+
+#### Drop-in shim for CrimsonForge
+
+Activate the Rust-backend by adding this at the very top of main.py:
+```python
+import cdcore.crimsonforge  # noqa: F401  (installs Rust shims for core.*)
 ```
 
 ---
