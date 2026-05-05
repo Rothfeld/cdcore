@@ -845,7 +845,7 @@ fn decode_dds_to_rgba(py: Python<'_>, data: Vec<u8>) -> PyResult<(u32, u32, Py<P
 #[gen_stub_pyclass]
 #[pyclass(name = "PabcFile")]
 pub struct PyPabcFile {
-    inner: crate::formats::pabc::PabcFile,
+    inner: crate::formats::mesh::pabc::PabcFile,
 }
 
 #[gen_stub_pymethods]
@@ -868,14 +868,14 @@ impl PyPabcFile {
 #[gen_stub_pyfunction]
 #[pyfunction]
 fn parse_pabc(data: Vec<u8>) -> PyResult<PyPabcFile> {
-    let inner = crate::formats::pabc::parse(&data).map_err(to_pyerr)?;
+    let inner = crate::formats::mesh::pabc::parse(&data).map_err(to_pyerr)?;
     Ok(PyPabcFile { inner })
 }
 
 #[gen_stub_pyfunction]
 #[pyfunction]
 fn is_par_file(data: Vec<u8>) -> bool {
-    crate::formats::pabc::is_par_file(&data)
+    crate::formats::mesh::pabc::is_par_file(&data)
 }
 
 // ---- PABC skin palette ------------------------------------------------------------------------------------------------------------------
@@ -884,7 +884,7 @@ fn is_par_file(data: Vec<u8>) -> bool {
 #[pyclass(name = "PabcSkinRecord", from_py_object)]
 #[derive(Clone)]
 pub struct PyPabcSkinRecord {
-    inner: crate::formats::pabc_skin::PabcSkinRecord,
+    inner: crate::formats::mesh::pabc_skin::PabcSkinRecord,
 }
 
 #[gen_stub_pymethods]
@@ -899,7 +899,7 @@ impl PyPabcSkinRecord {
 #[gen_stub_pyclass]
 #[pyclass(name = "PabcSkinPalette")]
 pub struct PyPabcSkinPalette {
-    inner: crate::formats::pabc_skin::PabcSkinPalette,
+    inner: crate::formats::mesh::pabc_skin::PabcSkinPalette,
 }
 
 #[gen_stub_pymethods]
@@ -922,7 +922,7 @@ fn parse_skin_pabc(
     pab_hashes: Vec<u32>,
     filename: Option<&str>,
 ) -> PyPabcSkinPalette {
-    let inner = crate::formats::pabc_skin::parse_skin(&data, &pab_hashes, filename.unwrap_or(""));
+    let inner = crate::formats::mesh::pabc_skin::parse_skin(&data, &pab_hashes, filename.unwrap_or(""));
     PyPabcSkinPalette { inner }
 }
 

@@ -3,7 +3,5 @@ pub mod audio;
 pub mod data;
 pub mod image;
 pub mod mesh;
-pub mod pabc;
-pub mod pabc_skin;
 pub mod physics;
 pub mod scene;

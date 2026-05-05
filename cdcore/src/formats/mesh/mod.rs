@@ -1,4 +1,6 @@
 pub mod fbx;
+pub mod pabc;
+pub mod pabc_skin;
 pub mod pac;
 pub mod pam;
 pub mod pamlod;
