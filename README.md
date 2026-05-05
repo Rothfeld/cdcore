@@ -139,6 +139,7 @@ Hidden root directories expose binary files in more usable formats:
 ```
 
 `.paloc.jsonl/` and `.dds.png/` support write-back: save converts to binary and repacks.
+(other formats might be supported in the future)
 
 Directories present in multiple packages get `name@group` aliases alongside
 the default. Crimson Desert ships three voice-over languages in separate packages
@@ -146,7 +147,6 @@ the default. Crimson Desert ships three voice-over languages in separate package
 exposes `sound@0005/`, `sound@0006/`, `sound@0035/`. Applies to any conflicting
 directory, not just audio.
 
-FBX exporter: Rust port of `mesh_exporter.py`. Binary FBX 7.4, compatible with Blender, Maya, Unreal.
 
 ```bash
 # Edit German localisation
@@ -159,10 +159,10 @@ krita /media/max/cd/.dds.png/ui/bitmap_bell.dds.png
 blender /media/max/cd/.pam.fbx/object/cd_gimmick_statue_09_ball.pam.fbx
 
 # Play a voice line (default / last-loaded package)
-mpv /media/max/cd/.wem.ogg/sound/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg
+mpv /media/max/cd/.wem.ogg/sound/unique_gilbert_questdialog_day2_02542.wem.ogg
 
 # Play the English version specifically
-mpv /media/max/cd/.wem.ogg/sound@0006/nhm_adult_noble_1_questdialog_hello_00000.wem.ogg
+mpv /media/max/cd/.wem.ogg/sound@0006/unique_gilbert_questdialog_day2_02542.wem.ogg
 ```
 
 ---
