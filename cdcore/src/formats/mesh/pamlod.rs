@@ -191,6 +191,7 @@ fn parse_lod(data: &[u8], filename: &str, lod_level: usize) -> Result<ParsedMesh
         faces:        all_faces,
         vertex_count: total_v,
         face_count:   total_f,
+        ..Default::default()
     };
 
     let mut result = ParsedMesh {

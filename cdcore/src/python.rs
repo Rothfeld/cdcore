@@ -840,6 +840,102 @@ fn decode_dds_to_rgba(py: Python<'_>, data: Vec<u8>) -> PyResult<(u32, u32, Py<P
     Ok((w, h, PyBytes::new(py, &rgba).unbind()))
 }
 
+// ---- mesh importer / builder shims (stage 8) ---------------------------------------------------------
+//
+// End-to-end Rust-backed flow for the round-trip pipeline:
+//   import_obj_to_mesh(obj_path) -> PyParsedMesh
+//   build_pam_from_obj(obj_path, original_data) -> bytes
+//
+// The Rust side reads `<obj_path>.cfmeta.json` automatically. `build_pam_from_obj`
+// returns Err when the edit triggers the full-rebuild path (topology, UV, or
+// submesh-count change) -- stage 4b, not yet implemented.
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn import_obj_to_mesh(obj_path: &str) -> PyResult<PyParsedMesh> {
+    let p = std::path::Path::new(obj_path);
+    let mesh = crate::repack::mesh::import_obj(p).map_err(to_pyerr)?;
+    Ok(PyParsedMesh { inner: mesh })
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn import_fbx_to_mesh(fbx_path: &str) -> PyResult<PyParsedMesh> {
+    let p = std::path::Path::new(fbx_path);
+    let mesh = crate::repack::mesh::import_fbx(p).map_err(to_pyerr)?;
+    Ok(PyParsedMesh { inner: mesh })
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn build_pac_from_fbx(
+    py: Python<'_>,
+    fbx_path: &str,
+    original_data: Vec<u8>,
+) -> PyResult<Py<PyBytes>> {
+    let p = std::path::Path::new(fbx_path);
+    let mesh = crate::repack::mesh::import_fbx(p).map_err(to_pyerr)?;
+    let bytes = crate::repack::mesh::build_pac(&mesh, &original_data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn build_pam_from_fbx(
+    py: Python<'_>,
+    fbx_path: &str,
+    original_data: Vec<u8>,
+) -> PyResult<Py<PyBytes>> {
+    let p = std::path::Path::new(fbx_path);
+    let mesh = crate::repack::mesh::import_fbx(p).map_err(to_pyerr)?;
+    let bytes = crate::repack::mesh::build_pam(&mesh, &original_data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn build_pam_from_obj(
+    py: Python<'_>,
+    obj_path: &str,
+    original_data: Vec<u8>,
+) -> PyResult<Py<PyBytes>> {
+    let p = std::path::Path::new(obj_path);
+    let mesh = crate::repack::mesh::import_obj(p).map_err(to_pyerr)?;
+    let bytes = crate::repack::mesh::build_pam(&mesh, &original_data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn build_pamlod_from_obj(
+    py: Python<'_>,
+    obj_path: &str,
+    original_data: Vec<u8>,
+) -> PyResult<Py<PyBytes>> {
+    let p = std::path::Path::new(obj_path);
+    let mesh = crate::repack::mesh::import_obj(p).map_err(to_pyerr)?;
+    let bytes = crate::repack::mesh::build_pamlod(&mesh, &original_data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn build_pac_from_obj(
+    py: Python<'_>,
+    obj_path: &str,
+    original_data: Vec<u8>,
+) -> PyResult<Py<PyBytes>> {
+    let p = std::path::Path::new(obj_path);
+    let mesh = crate::repack::mesh::import_obj(p).map_err(to_pyerr)?;
+    let bytes = crate::repack::mesh::build_pac(&mesh, &original_data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
 // ---- PABC morph-target ----------------------------------------------------------------------------------------------------------------
 
 #[gen_stub_pyclass]
@@ -985,6 +1081,13 @@ pub fn cdcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // DDS
     m.add_function(wrap_pyfunction!(decode_dds_to_rgba, m)?)?;
+    m.add_function(wrap_pyfunction!(import_obj_to_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(import_fbx_to_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(build_pam_from_obj, m)?)?;
+    m.add_function(wrap_pyfunction!(build_pamlod_from_obj, m)?)?;
+    m.add_function(wrap_pyfunction!(build_pac_from_obj, m)?)?;
+    m.add_function(wrap_pyfunction!(build_pam_from_fbx, m)?)?;
+    m.add_function(wrap_pyfunction!(build_pac_from_fbx, m)?)?;
 
     // PABC
     m.add_function(wrap_pyfunction!(parse_pabc, m)?)?;

@@ -48,8 +48,37 @@ pub struct SubMesh {
     pub uvs: Vec<[f32; 2]>,
     pub normals: Vec<[f32; 3]>,
     pub faces: Vec<[u32; 3]>,
+    /// Per-vertex bone indices. Variable arity (1-4 typical for character meshes,
+    /// empty for rigid props). Only populated for skinned meshes.
+    pub bone_indices: Vec<Vec<u32>>,
+    /// Per-vertex bone weights matching `bone_indices`. Sum to 1.0 per vertex.
+    pub bone_weights: Vec<Vec<f32>>,
     pub vertex_count: usize,
     pub face_count: usize,
+
+    // ── Source provenance fields, populated by readers when info is available ──
+    // The writer (cdcore::repack::mesh) consults these to clone the original
+    // PAC vertex record (which holds bone bindings + packed normals + engine
+    // bytes that the OBJ round-trip cannot preserve) before overwriting the
+    // editable fields.
+    pub source_vertex_offsets: Vec<i64>,
+    pub source_index_offset: i64,
+    pub source_index_count: usize,
+    pub source_vertex_stride: usize,
+    pub source_descriptor_offset: i64,
+    pub source_bbox_min: [f32; 3],
+    pub source_bbox_extent: [f32; 3],
+    pub source_lod_count: usize,
+    /// For each imported vertex: index into the original submesh vertex slot
+    /// it was sourced from, or -1 if added after export. Filled by the OBJ
+    /// importer via the `.cfmeta.json` sidecar, falls back to nearest-position
+    /// matching when no sidecar exists.
+    pub source_vertex_map: Vec<i64>,
+
+    /// Importer-only flag (upstream f206431): when true the PAC builder zeros
+    /// out the donor's per-vertex shading record bytes before applying the
+    /// recomputed normal, instead of keeping the donor's stale shading data.
+    pub clean_donor_shading_records: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -59,9 +88,17 @@ pub struct ParsedMesh {
     pub bbox_min: [f32; 3],
     pub bbox_max: [f32; 3],
     pub submeshes: Vec<SubMesh>,
+    /// Populated only for PAMLOD meshes: outer index = LOD level (0 = highest detail).
+    pub lod_levels: Vec<Vec<SubMesh>>,
     pub total_vertices: usize,
     pub total_faces: usize,
     pub has_uvs: bool,
+    pub has_bones: bool,
+
+    /// Mirrors the upstream `clean_donor_shading_records` flag at the mesh
+    /// level. Either this or per-submesh setting trips the PAC builder's
+    /// shading-record reset path.
+    pub clean_donor_shading_records: bool,
 }
 
 pub fn parse(data: &[u8], filename: &str) -> Result<ParsedMesh> {
@@ -238,6 +275,13 @@ fn parse_combined(
 
         let (verts, uvs) = extract_verts(data, vert_base, stride, &unique, bmin, bmax, has_uv);
         let faces = extract_faces(&indices, &idx_map);
+        // Byte offset of each vertex's quantized XYZ triple in the original
+        // blob; the writer uses these to overwrite positions in-place without
+        // a fragile linear scan. Order matches `verts`.
+        let source_vertex_offsets: Vec<i64> = unique
+            .iter()
+            .map(|&gi| (vert_base + gi * stride) as i64)
+            .collect();
 
         result.submeshes.push(SubMesh {
             name: format!("mesh_{:02}_{}", e.index, &e.material),
@@ -248,6 +292,8 @@ fn parse_combined(
             faces,
             vertex_count: unique.len(),
             face_count: faces_count(&indices),
+            source_vertex_offsets,
+            source_vertex_stride: stride,
             ..Default::default()
         });
     }
@@ -273,6 +319,10 @@ fn parse_independent(
             let idx_map: std::collections::HashMap<usize,usize> = unique.iter().enumerate().map(|(i,&g)|(g,i)).collect();
             let (verts, uvs) = extract_verts(data, vert_base, stride, &unique, bmin, bmax, has_uv);
             let faces = extract_faces(&indices, &idx_map);
+            let source_vertex_offsets: Vec<i64> = unique
+                .iter()
+                .map(|&gi| (vert_base + gi * stride) as i64)
+                .collect();
             result.submeshes.push(SubMesh {
                 name: format!("mesh_{:02}_{}", e.index, &e.material),
                 material: e.material.clone(),
@@ -282,6 +332,10 @@ fn parse_independent(
                 vertices: verts,
                 uvs,
                 faces,
+                source_vertex_offsets,
+                source_vertex_stride: stride,
+                source_index_offset: idx_off as i64,
+                source_index_count: e.ni,
                 ..Default::default()
             });
         }

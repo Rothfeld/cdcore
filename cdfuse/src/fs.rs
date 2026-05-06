@@ -152,6 +152,9 @@ struct DirEntry {
 
 pub struct SharedFs {
     vfs:           VfsManager,
+    /// Lazy index of every `*.prefab` in the VFS. Powers the synthetic
+    /// `/_prefabs/<stem>/...` subtree (manifest + asset pass-through).
+    prefab_index:  crate::prefab_view::PrefabIndex,
     path_queue:    Mutex<Vec<Vec<(u64, Box<str>, bool)>>>,
     dir_cache:     RwLock<HashMap<u64, Arc<OnceLock<Vec<DirEntry>>>>>,
     decode_cache:  Mutex<LruCache<u64, Arc<[u8]>>>,
@@ -188,6 +191,7 @@ impl SharedFs {
             .expect("failed to build decode thread pool");
         SharedFs {
             vfs,
+            prefab_index: crate::prefab_view::PrefabIndex::new(),
             path_queue:    Mutex::new(Vec::new()),
             dir_cache:     RwLock::new(HashMap::new()),
             decode_cache:  Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CACHE_ENTRIES).unwrap())),
@@ -332,6 +336,52 @@ impl SharedFs {
         };
 
         let result = slot.get_or_init(|| {
+            // Prefab-view synth: manifest.json (built from parsed prefab),
+            // prefab.prefab and assets/* (delegated to underlying VFS path).
+            use crate::prefab_view::{self as pv, PrefabPath};
+            if let Some(pp) = pv::classify(path) {
+                match pp {
+                    PrefabPath::Manifest { stem } => {
+                        let full = self.prefab_index.full_path_of(&self.vfs, stem)?;
+                        return Some(Arc::from(pv::synth_manifest(&self.vfs, &full)));
+                    }
+                    PrefabPath::PrefabFile { stem } => {
+                        let full = self.prefab_index.full_path_of(&self.vfs, stem)?;
+                        let src_ino = ino_for(&full);
+                        return self.decode(src_ino, &full);
+                    }
+                    PrefabPath::AssetsEntry { stem, relpath } => {
+                        let full = self.prefab_index.full_path_of(&self.vfs, stem)?;
+                        // Could resolve to a file or to an intermediate dir;
+                        // only files have decoded bytes. Dirs return None here
+                        // (callers don't read directories via decode()).
+                        let asset_path = pv::vfs_path_for_asset(&self.vfs, &full, relpath)?;
+                        // Synth `.dds.png`: decode the source DDS then PNG-encode.
+                        if pv::is_dds_png_relpath(&self.vfs, &full, relpath) {
+                            let src_ino  = ino_for(&asset_path);
+                            let src_data = self.decode(src_ino, &asset_path)?;
+                            let png      = virtual_files::render_dds_png(&src_data, &asset_path)?;
+                            return Some(Arc::from(png));
+                        }
+                        let src_ino = ino_for(&asset_path);
+                        return self.decode(src_ino, &asset_path);
+                    }
+                    PrefabPath::MeshFbx { stem } => {
+                        let full = self.prefab_index.full_path_of(&self.vfs, stem)?;
+                        return pv::synth_mesh_fbx(&self.vfs, &full).map(Arc::from);
+                    }
+                    PrefabPath::FbmEntry { stem, relpath } => {
+                        let full = self.prefab_index.full_path_of(&self.vfs, stem)?;
+                        let dds_path = pv::dds_path_for_fbm_png(&self.vfs, &full, relpath)?;
+                        let src_ino  = ino_for(&dds_path);
+                        let src_data = self.decode(src_ino, &dds_path)?;
+                        let png      = virtual_files::render_dds_png(&src_data, &dds_path)?;
+                        return Some(Arc::from(png));
+                    }
+                    _ => return None, // Root / BundleDir / AssetsDir / FbmDir are directories.
+                }
+            }
+
             if let Some(vf) = virtual_files::resolve(path) {
                 let src_ino  = ino_for(&vf.source_path);
                 let src_data = self.decode(src_ino, &vf.source_path)?;
@@ -492,6 +542,9 @@ impl SharedFs {
         if let Some(vdir) = virtual_files::resolve_virtual_dir(path) {
             return self.build_virtual_dir_entries(ino, path, &vdir);
         }
+        if crate::prefab_view::classify(path).is_some() {
+            return self.build_prefab_dir_entries(ino, path);
+        }
 
         let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
         let mut entries = vec![
@@ -501,7 +554,7 @@ impl SharedFs {
 
         let children = self.vfs.list_dir_with_sizes_unsorted(path);
         let mut queue_batch: Vec<(u64, Box<str>, bool)> = Vec::with_capacity(
-            children.len() + virtual_files::virtual_root_dirs().count()
+            children.len() + virtual_files::virtual_root_dirs().count() + 1
         );
 
         if path.is_empty() {
@@ -516,6 +569,14 @@ impl SharedFs {
                     name: vdir_name.to_string(), attr_ttl: TTL,
                 });
             }
+            // Surface the synthetic `_prefabs` root alongside the other virtual roots.
+            let prefab_root = crate::prefab_view::PREFAB_ROOT_NAME;
+            let pino = ino_for(prefab_root);
+            queue_batch.push((pino, Box::from(prefab_root), true));
+            entries.push(DirEntry {
+                ino: pino, attr: self.dir_attr(pino),
+                name: prefab_root.to_string(), attr_ttl: TTL,
+            });
         }
 
         for (name, is_dir, orig_size) in &children {
@@ -535,6 +596,191 @@ impl SharedFs {
         let n = entries.len().saturating_sub(2);
         info!("readdir {path:?} -> {n} entries");
         entries
+    }
+
+    fn build_prefab_dir_entries(&self, ino: u64, path: &str) -> Vec<DirEntry> {
+        use crate::prefab_view::{self as pv, PrefabPath};
+        let parent_ino = if ino == ROOT_INO { ROOT_INO } else { ino_for(parent_path(path)) };
+        let mut entries = vec![
+            DirEntry { ino, attr: self.dir_attr(ino), name: ".".into(), attr_ttl: TTL },
+            DirEntry { ino: parent_ino, attr: self.dir_attr(parent_ino), name: "..".into(), attr_ttl: TTL },
+        ];
+        let mut queue_batch: Vec<(u64, Box<str>, bool)> = Vec::new();
+
+        match pv::classify(path).expect("classified above") {
+            PrefabPath::Root => {
+                for stem in self.prefab_index.stems(&self.vfs) {
+                    let cp = format!("{}/{stem}", pv::PREFAB_ROOT_NAME);
+                    let cino = ino_for(&cp);
+                    queue_batch.push((cino, cp.clone().into(), true));
+                    entries.push(DirEntry {
+                        ino: cino, attr: self.dir_attr(cino),
+                        name: stem, attr_ttl: TTL,
+                    });
+                }
+            }
+            PrefabPath::BundleDir { stem } => {
+                // manifest.json
+                let mp = format!("{}/{stem}/{}", pv::PREFAB_ROOT_NAME, pv::MANIFEST_NAME);
+                let mino = ino_for(&mp);
+                queue_batch.push((mino, mp.clone().into(), false));
+                let mlen = pv::synth_manifest(&self.vfs, &self.prefab_full_path(stem).unwrap_or_default()).len() as u64;
+                entries.push(DirEntry {
+                    ino: mino, attr: self.file_attr(mino, &mp, mlen),
+                    name: pv::MANIFEST_NAME.to_string(), attr_ttl: Duration::ZERO,
+                });
+                // prefab.prefab (real bytes pass-through)
+                if let Some(full) = self.prefab_full_path(stem) {
+                    if let Some(e) = self.vfs.lookup(&full) {
+                        let pp = format!("{}/{stem}/prefab.prefab", pv::PREFAB_ROOT_NAME);
+                        let pino = ino_for(&pp);
+                        queue_batch.push((pino, pp.clone().into(), false));
+                        entries.push(DirEntry {
+                            ino: pino, attr: self.file_attr(pino, &pp, e.orig_size as u64),
+                            name: "prefab.prefab".to_string(), attr_ttl: Duration::ZERO,
+                        });
+                    }
+                }
+                // assets/ subdir
+                let ap = format!("{}/{stem}/{}", pv::PREFAB_ROOT_NAME, pv::ASSETS_DIR_NAME);
+                let aino = ino_for(&ap);
+                queue_batch.push((aino, ap.clone().into(), true));
+                entries.push(DirEntry {
+                    ino: aino, attr: self.dir_attr(aino),
+                    name: pv::ASSETS_DIR_NAME.to_string(), attr_ttl: TTL,
+                });
+                // mesh.fbx + mesh.fbm/ when the prefab references a decodable mesh.
+                if let Some(full) = self.prefab_full_path(stem) {
+                    if pv::primary_mesh_path(&self.vfs, &full).is_some() {
+                        let fp = format!("{}/{stem}/{}", pv::PREFAB_ROOT_NAME, pv::MESH_FBX_NAME);
+                        let fino = ino_for(&fp);
+                        queue_batch.push((fino, fp.clone().into(), false));
+                        entries.push(DirEntry {
+                            ino: fino, attr: self.file_attr(fino, &fp, 0),
+                            name: pv::MESH_FBX_NAME.to_string(), attr_ttl: Duration::ZERO,
+                        });
+                        let dp = format!("{}/{stem}/{}", pv::PREFAB_ROOT_NAME, pv::MESH_FBM_DIR);
+                        let dino = ino_for(&dp);
+                        queue_batch.push((dino, dp.clone().into(), true));
+                        entries.push(DirEntry {
+                            ino: dino, attr: self.dir_attr(dino),
+                            name: pv::MESH_FBM_DIR.to_string(), attr_ttl: TTL,
+                        });
+                    }
+                }
+            }
+            PrefabPath::FbmDir { stem } => {
+                if let Some(full) = self.prefab_full_path(stem) {
+                    self.push_assets_tree_children(
+                        &mut entries, &mut queue_batch,
+                        &pv::fbm_dir_children(&self.vfs, &full, ""),
+                        stem, pv::MESH_FBM_DIR, "",
+                        None,  // size unknown; surface 0
+                    );
+                }
+            }
+            PrefabPath::AssetsDir { stem } => {
+                if let Some(full) = self.prefab_full_path(stem) {
+                    self.push_assets_tree_children(
+                        &mut entries, &mut queue_batch,
+                        &pv::assets_dir_children(&self.vfs, &full, ""),
+                        stem, pv::ASSETS_DIR_NAME, "",
+                        Some(&self.vfs),
+                    );
+                }
+            }
+            // Intermediate subdirs under assets/ or mesh.fbm/ -- list direct
+            // children only (one VFS-mirrored level deep at a time).
+            PrefabPath::AssetsEntry { stem, relpath } => {
+                if let Some(full) = self.prefab_full_path(stem) {
+                    self.push_assets_tree_children(
+                        &mut entries, &mut queue_batch,
+                        &pv::assets_dir_children(&self.vfs, &full, relpath),
+                        stem, pv::ASSETS_DIR_NAME, relpath,
+                        Some(&self.vfs),
+                    );
+                }
+            }
+            PrefabPath::FbmEntry { stem, relpath } => {
+                if let Some(full) = self.prefab_full_path(stem) {
+                    self.push_assets_tree_children(
+                        &mut entries, &mut queue_batch,
+                        &pv::fbm_dir_children(&self.vfs, &full, relpath),
+                        stem, pv::MESH_FBM_DIR, relpath,
+                        None,
+                    );
+                }
+            }
+            // Files don't have entries themselves.
+            PrefabPath::Manifest { .. }
+            | PrefabPath::PrefabFile { .. }
+            | PrefabPath::MeshFbx { .. } => {}
+        }
+
+        self.path_queue.lock().unwrap().push(queue_batch);
+        let n = entries.len().saturating_sub(2);
+        info!("readdir (prefab) {path:?} -> {n} entries");
+        entries
+    }
+
+    /// Resolve a prefab stem to its full VFS path via the cached index.
+    fn prefab_full_path(&self, stem: &str) -> Option<String> {
+        self.prefab_index.full_path_of(&self.vfs, stem)
+    }
+
+    /// Append a single level of children (files + immediate subdirs) into
+    /// the readdir buffer. `tree_root` is the synth root within the prefab
+    /// (e.g. `assets` or `mesh.fbm`); `prefix` is the relpath of the current
+    /// dir under that root (empty when listing the root itself).
+    /// `size_lookup_vfs`: when Some, file sizes for non-DDS-PNG entries come
+    /// from the underlying VFS entry. Otherwise sizes report 0 (file managers
+    /// tolerate that and the data appears at decode time).
+    #[allow(clippy::too_many_arguments)]
+    fn push_assets_tree_children(
+        &self,
+        entries: &mut Vec<DirEntry>,
+        queue_batch: &mut Vec<(u64, Box<str>, bool)>,
+        children: &[crate::prefab_view::AssetsTreeChild],
+        stem: &str,
+        tree_root: &str,
+        prefix: &str,
+        size_lookup_vfs: Option<&cdcore::VfsManager>,
+    ) {
+        use crate::prefab_view as pv;
+        let dir_base = if prefix.is_empty() {
+            format!("{}/{stem}/{tree_root}", pv::PREFAB_ROOT_NAME)
+        } else {
+            format!("{}/{stem}/{tree_root}/{prefix}", pv::PREFAB_ROOT_NAME)
+        };
+        for child in children {
+            match child {
+                pv::AssetsTreeChild::Dir { name } => {
+                    let cp = format!("{dir_base}/{name}");
+                    let cino = ino_for(&cp);
+                    queue_batch.push((cino, cp.clone().into(), true));
+                    entries.push(DirEntry {
+                        ino: cino, attr: self.dir_attr(cino),
+                        name: name.clone(), attr_ttl: TTL,
+                    });
+                }
+                pv::AssetsTreeChild::File { relpath, name, is_dds_png } => {
+                    let cp = format!("{dir_base}/{name}");
+                    let cino = ino_for(&cp);
+                    let size = if *is_dds_png {
+                        0
+                    } else if let Some(vfs) = size_lookup_vfs {
+                        vfs.lookup(relpath).map(|e| e.orig_size as u64).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    queue_batch.push((cino, cp.clone().into(), false));
+                    entries.push(DirEntry {
+                        ino: cino, attr: self.file_attr(cino, &cp, size),
+                        name: name.clone(), attr_ttl: Duration::ZERO,
+                    });
+                }
+            }
+        }
     }
 
     fn build_virtual_dir_entries(&self, ino: u64, path: &str,
@@ -634,6 +880,70 @@ impl SharedFs {
     fn flush_path_sync(&self, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(path);
         self.write_mtimes.lock().unwrap().remove(path);
+
+        // Prefab-view synth `mesh.fbx`: write FBX bytes to a temp file, import
+        // back into a ParsedMesh, build new mesh bytes via the appropriate
+        // builder for the underlying format, then recurse to flush the real path.
+        if let Some(crate::prefab_view::PrefabPath::MeshFbx { stem }) = crate::prefab_view::classify(path) {
+            let full = match self.prefab_index.full_path_of(&self.vfs, stem) {
+                Some(s) => s,
+                None    => { warn!("flush mesh.fbx {path}: prefab stem not found"); return; }
+            };
+            let mesh_path = match crate::prefab_view::primary_mesh_path(&self.vfs, &full) {
+                Some(p) => p,
+                None    => { warn!("flush mesh.fbx {path}: no resolvable mesh"); return; }
+            };
+            let tmp = std::env::temp_dir().join(format!("cdfuse_save_{}.fbx", std::process::id()));
+            if let Err(e) = std::fs::write(&tmp, &data) {
+                warn!("flush mesh.fbx {path}: temp write {tmp:?}: {e}"); return;
+            }
+            let mesh = match cdcore::repack::mesh::import_fbx(&tmp) {
+                Ok(m) => m,
+                Err(e) => {
+                    let msg = format!("import_fbx {path}: {e}");
+                    warn!("{msg}");
+                    self.push_event(format!("[err] {msg}"));
+                    let _ = std::fs::remove_file(&tmp);
+                    return;
+                }
+            };
+            let _ = std::fs::remove_file(&tmp);
+
+            // Read original bytes from VFS to feed the builders.
+            let entry = match self.vfs.lookup(&mesh_path) {
+                Some(e) => e,
+                None    => { warn!("flush {path}: target mesh {mesh_path} not in VFS"); return; }
+            };
+            let original = match self.vfs.read_entry(&entry) {
+                Ok(b) => b,
+                Err(e) => { warn!("flush {path}: read {mesh_path}: {e}"); return; }
+            };
+
+            let lower = mesh_path.to_lowercase();
+            let result = if lower.ends_with(".pac") {
+                cdcore::repack::mesh::build_pac(&mesh, &original)
+            } else if lower.ends_with(".pamlod") {
+                cdcore::repack::mesh::build_pamlod(&mesh, &original)
+            } else if lower.ends_with(".pam") {
+                cdcore::repack::mesh::build_pam(&mesh, &original)
+            } else {
+                warn!("flush {path}: unsupported mesh extension {mesh_path}");
+                return;
+            };
+            match result {
+                Ok(new_bytes) => {
+                    info!("flush mesh.fbx {path}: built {}B for {mesh_path}", new_bytes.len());
+                    self.flush_path_sync(&mesh_path, new_bytes);
+                }
+                Err(e) => {
+                    let msg = format!("build_mesh {path}: {e}");
+                    warn!("{msg}");
+                    self.push_event(format!("[err] {msg}"));
+                }
+            }
+            return;
+        }
+
         if let Some(vf) = virtual_files::resolve(path) {
             match vf.kind {
                 virtual_files::VirtualKind::PalocJson => {
@@ -783,6 +1093,91 @@ impl Filesystem for CdFs {
         };
         let child = SharedFs::child_path(&parent_path, name);
 
+        // Prefab-view synth tree handled before the real-VFS check so paths
+        // under `_prefabs/` resolve even though they don't exist in the game files.
+        if let Some(pp) = crate::prefab_view::classify(&child) {
+            use crate::prefab_view::PrefabPath;
+            // Resolve (valid, is_dir) by inspecting the bundle. AssetsEntry /
+            // FbmEntry can be either a real file or an intermediate subdir;
+            // they pivot on whether the relpath matches an asset entry exactly
+            // (file) or appears as a prefix (dir).
+            let (valid, is_dir) = match &pp {
+                PrefabPath::Root => (true, true),
+                PrefabPath::BundleDir { stem }
+                | PrefabPath::Manifest { stem }
+                | PrefabPath::PrefabFile { stem }
+                | PrefabPath::AssetsDir { stem } => {
+                    let exists = self.shared.prefab_index.full_path_of(&self.shared.vfs, stem).is_some();
+                    let is_dir = matches!(pp, PrefabPath::BundleDir { .. } | PrefabPath::AssetsDir { .. });
+                    (exists, is_dir)
+                }
+                PrefabPath::AssetsEntry { stem, relpath } => {
+                    if let Some(full) = self.shared.prefab_index.full_path_of(&self.shared.vfs, stem) {
+                        if crate::prefab_view::vfs_path_for_asset(&self.shared.vfs, &full, relpath).is_some() {
+                            (true, false)
+                        } else if crate::prefab_view::is_assets_subdir(&self.shared.vfs, &full, relpath) {
+                            (true, true)
+                        } else {
+                            (false, false)
+                        }
+                    } else {
+                        (false, false)
+                    }
+                }
+                PrefabPath::MeshFbx { stem }
+                | PrefabPath::FbmDir { stem } => {
+                    let has_mesh = self.shared.prefab_index.full_path_of(&self.shared.vfs, stem)
+                        .and_then(|full| crate::prefab_view::primary_mesh_path(&self.shared.vfs, &full))
+                        .is_some();
+                    let is_dir = matches!(pp, PrefabPath::FbmDir { .. });
+                    (has_mesh, is_dir)
+                }
+                PrefabPath::FbmEntry { stem, relpath } => {
+                    if let Some(full) = self.shared.prefab_index.full_path_of(&self.shared.vfs, stem) {
+                        if crate::prefab_view::dds_path_for_fbm_png(&self.shared.vfs, &full, relpath).is_some() {
+                            (true, false)
+                        } else if crate::prefab_view::is_fbm_subdir(&self.shared.vfs, &full, relpath) {
+                            (true, true)
+                        } else {
+                            (false, false)
+                        }
+                    } else {
+                        (false, false)
+                    }
+                }
+            };
+            if !valid {
+                reply.entry(&TTL, &ABSENT_ATTR, 0);
+                return;
+            }
+            let ino = self.ensure_path(&child, is_dir);
+            let attr = if is_dir {
+                self.shared.dir_attr(ino)
+            } else {
+                // Size of synth manifest is its content len; pass-through files
+                // borrow the underlying VFS entry's orig_size.
+                let size = match &pp {
+                    PrefabPath::Manifest { stem } => self.shared.prefab_index
+                        .full_path_of(&self.shared.vfs, stem)
+                        .map(|full| crate::prefab_view::synth_manifest(&self.shared.vfs, &full).len() as u64)
+                        .unwrap_or(0),
+                    PrefabPath::PrefabFile { stem } => self.shared.prefab_index
+                        .full_path_of(&self.shared.vfs, stem)
+                        .and_then(|full| self.shared.vfs.lookup(&full).map(|e| e.orig_size as u64))
+                        .unwrap_or(0),
+                    PrefabPath::AssetsEntry { stem, relpath } => self.shared.prefab_index
+                        .full_path_of(&self.shared.vfs, stem)
+                        .and_then(|full| crate::prefab_view::vfs_path_for_asset(&self.shared.vfs, &full, relpath))
+                        .and_then(|p| self.shared.vfs.lookup(&p).map(|e| e.orig_size as u64))
+                        .unwrap_or(0),
+                    _ => 0,
+                };
+                self.shared.file_attr(ino, &child, size)
+            };
+            reply.entry(&Duration::ZERO, &attr, 0);
+            return;
+        }
+
         if let Some(entry) = self.shared.vfs.lookup(&child) {
             let ino  = self.ensure_path(&child, false);
             let attr = self.shared.file_attr(ino, &child, entry.orig_size as u64);
@@ -841,6 +1236,31 @@ impl Filesystem for CdFs {
             Some(p) => p.to_string(),
             None    => { reply.error(ENOENT); return; }
         };
+        // Prefab-view synth files: size from cache if present, else compute on the fly.
+        if let Some(pp) = crate::prefab_view::classify(&path) {
+            use crate::prefab_view::PrefabPath;
+            let size = match self.shared.cache_get(ino) {
+                Some(d) => d.len() as u64,
+                None    => match &pp {
+                    PrefabPath::Manifest { stem } => self.shared.prefab_index
+                        .full_path_of(&self.shared.vfs, stem)
+                        .map(|full| crate::prefab_view::synth_manifest(&self.shared.vfs, &full).len() as u64)
+                        .unwrap_or(0),
+                    PrefabPath::PrefabFile { stem } => self.shared.prefab_index
+                        .full_path_of(&self.shared.vfs, stem)
+                        .and_then(|full| self.shared.vfs.lookup(&full).map(|e| e.orig_size as u64))
+                        .unwrap_or(0),
+                    PrefabPath::AssetsEntry { stem, relpath } => self.shared.prefab_index
+                        .full_path_of(&self.shared.vfs, stem)
+                        .and_then(|full| crate::prefab_view::vfs_path_for_asset(&self.shared.vfs, &full, relpath))
+                        .and_then(|p| self.shared.vfs.lookup(&p).map(|e| e.orig_size as u64))
+                        .unwrap_or(0),
+                    _ => 0,
+                },
+            };
+            reply.attr(&Duration::ZERO, &self.shared.file_attr(ino, &path, size));
+            return;
+        }
         if let Some(e) = self.shared.vfs.lookup(&path) {
             let size = self.shared.write_overlay.lock().unwrap()
                 .get(&path).map(|d| d.len() as u64)

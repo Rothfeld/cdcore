@@ -6,6 +6,7 @@
 
 use cdcore::vfs::manager::VfsManager;
 use cdcore::formats::mesh::{parse_pam, parse_pamlod};
+use cdcore::formats::mesh::pac::{find_pac_descriptors, parse_par_sections};
 
 fn vfs() -> Option<VfsManager> {
     if !std::path::Path::new("/cd/0000").exists() {
@@ -13,6 +14,17 @@ fn vfs() -> Option<VfsManager> {
     }
     let vfs = VfsManager::new("/cd").ok()?;
     vfs.load_group("0000").ok()?;
+    Some(vfs)
+}
+
+/// Like `vfs()` but loads every package group; needed for character PACs
+/// which live outside group 0000.
+fn vfs_all() -> Option<VfsManager> {
+    if !std::path::Path::new("/cd/0000").exists() {
+        return None;
+    }
+    let vfs = VfsManager::new("/cd").ok()?;
+    vfs.load_all_groups().ok()?;
     Some(vfs)
 }
 
@@ -104,4 +116,54 @@ fn pamlod_stairs_format_c() {
     let data = read(&vfs, "object/cd_spot_tower_10_stairs_01.pamlod");
     let mesh = parse_pamlod(&data, "cd_spot_tower_10_stairs_01.pamlod").unwrap();
     assert_eq!(mesh.total_vertices, 9310, "stairs LOD0 vertex count");
+}
+
+// ---- PAC descriptor recovery ---------------------------------------------------------------------
+
+#[test]
+fn pac_descriptor_recovery_doorstatue() {
+    // 4-LOD descriptor pattern (04 00 01 02 03). Single submesh.
+    let Some(vfs) = vfs_all() else { return };
+    let data = read(&vfs, "character/cd_0081_doorstatue.pac");
+    let sections = parse_par_sections(&data);
+    let sec0 = sections.iter().find(|s| s.index == 0).expect("section 0");
+    assert!(sec0.size >= 5, "section 0 too small");
+    let n_lods = data[sec0.offset + 4] as usize;
+    assert_eq!(n_lods, 4, "doorstatue has 4 LODs");
+    let descriptors = find_pac_descriptors(&data, sec0.offset, sec0.size, n_lods);
+    assert_eq!(descriptors.len(), 1);
+    assert_eq!(descriptors[0].stored_lod_count, 4);
+    assert!(descriptors[0].vertex_counts[0] > 0);
+}
+
+#[test]
+fn pac_descriptor_recovery_eye_3lod() {
+    // 3-LOD descriptor pattern. Eye meshes use the alternate Macduff-style
+    // 03 00 01 01 02 layout.
+    let Some(vfs) = vfs_all() else { return };
+    let data = read(&vfs, "character/cd_m0001_00_ancientpeople_eyeleft_0001.pac");
+    let sections = parse_par_sections(&data);
+    let sec0 = sections.iter().find(|s| s.index == 0).expect("section 0");
+    let n_lods = data[sec0.offset + 4] as usize;
+    assert_eq!(n_lods, 3, "eye mesh has 3 LODs");
+    let descriptors = find_pac_descriptors(&data, sec0.offset, sec0.size, n_lods);
+    assert_eq!(descriptors.len(), 1);
+    assert_eq!(descriptors[0].stored_lod_count, 3);
+}
+
+#[test]
+fn pac_descriptor_recovery_giant_multi_submesh() {
+    // 23-submesh ancient giant character. Sanity check on multi-submesh recovery.
+    let Some(vfs) = vfs_all() else { return };
+    let data = read(&vfs, "character/cd_m0001_00_ancientgiant_nude_0001.pac");
+    let sections = parse_par_sections(&data);
+    let sec0 = sections.iter().find(|s| s.index == 0).expect("section 0");
+    let n_lods = data[sec0.offset + 4] as usize;
+    let descriptors = find_pac_descriptors(&data, sec0.offset, sec0.size, n_lods);
+    assert_eq!(descriptors.len(), 23);
+    // Descriptors are sorted by file offset; they should all sit inside section 0.
+    for (i, d) in descriptors.iter().enumerate() {
+        assert!(d.descriptor_offset >= sec0.offset, "desc {i} before sec0");
+        assert!(d.descriptor_offset < sec0.offset + sec0.size, "desc {i} past sec0");
+    }
 }
