@@ -71,7 +71,7 @@ Read-write: edits repack to PAZ on close.
 
 </details>
 
-![cdfuse demo](.assets/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?") ![cdwinfs demo](.assets/cdwinfs_demo.webp "edit a texture in paint, save it, watch the mod land in the PAZ. no alt-tabbing to an unpacker.")
+![cdfuse demo](.assets/demo.gif "when i was younger, modding counter strike was as simple as dragging a file into a directory. why should it be harder?") ![cdwinfs demo](.assets/cdwinfs_demo.webp "how small do i have to make a thumbnail of a texture for it to become fair use?")
 
 
 **First launch -- interactive setup:**
