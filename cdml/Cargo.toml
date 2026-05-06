@@ -1,0 +1,50 @@
+[package]
+name = "cdml"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "CLIP image/text embedding + brute-force vector search for Crimson Desert assets"
+
+[lib]
+name = "cdml"
+
+[dependencies]
+cdcore              = { path = "../cdcore" }   # VFS + ChaCha20/LZ4 read pipeline + DDS decoder
+candle-core         = { version = "0.10", features = ["cuda"] }   # tensor + cpu/cuda backend; mmap-loads pytorch_model.bin via from_pth
+candle-nn           = { version = "0.10", features = ["cuda"] }   # nn building blocks (used by candle-transformers)
+candle-transformers = { version = "0.10", features = ["cuda"] }   # ships clip::ClipModel + ClipConfig
+hf-hub              = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"] }  # ureq sync API + rustls (no openssl-sys C dep)
+tokenizers          = { version = "0.21", default-features = false, features = ["fancy-regex"] }  # pure-Rust regex; avoids esaxx-rs (C++) and onig (C)
+image               = "0.25"          # decode jpg/png, resize for CLIP preprocessing
+memmap2             = "0.9"           # mmap embeddings.bin so 100k vectors load instantly
+byteorder           = "1.5"           # little-endian header read/write for embeddings.bin
+simsimd             = "6"             # SIMD cosine distance, fast brute-force topk
+anyhow              = "1"             # error propagation in bins
+thiserror           = "2"             # typed errors at module boundaries
+log                 = "0.4"           # logging facade
+env_logger          = "0.11"          # default logger impl for the bins
+clap                = { version = "4", features = ["derive"] }   # cli args for index/query bins
+walkdir             = "2"             # recurse image folder during indexing
+rayon               = "1"             # parallel VFS read + DDS decode pipeline (CPU side of cdml-index-dds)
+serde               = { version = "1", features = ["derive"] }   # results serialization
+serde_json          = "1"             # ditto
+
+[[bin]]
+name = "cdml-index"
+path = "src/bin/index.rs"
+
+[[bin]]
+name = "cdml-query"
+path = "src/bin/query.rs"
+
+[[bin]]
+name = "cdml-index-dds"
+path = "src/bin/index_dds.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
