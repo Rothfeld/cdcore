@@ -128,6 +128,70 @@ fn event_timestamp() -> String {
     format!("[{h:02}:{m:02}:{s:02}]")
 }
 
+/// True for any path whose first segment matches one of our synthetic root
+/// directory names (`.dds.png`, `.paloc.json`, `_prefabs`, ...). Used to keep
+/// editor temp files (Paint, etc.) from leaking into the user package group
+/// under a virtual prefix.
+fn is_under_virtual_root(path: &str) -> bool {
+    let head = path.split('/').next().unwrap_or("");
+    if head == crate::prefab_view::PREFAB_ROOT_NAME { return true; }
+    virtual_files::virtual_root_dirs().any(|v| v == head)
+}
+
+// -- Snapshots -- archive the original bytes before any overwrite -------------
+
+/// `<exe_parent>/snapshots`, or None if `current_exe()` can't be resolved.
+fn snapshot_root() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("snapshots"))
+}
+
+/// `YYYY-MM-DDTHH-MM-SS.sssZ`. Hinnant's civil-from-days algorithm; no deps.
+fn snapshot_stamp() -> String {
+    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = d.as_secs();
+    let ms   = d.subsec_millis();
+    let day_secs = secs % 86_400;
+    let hh = day_secs / 3600;
+    let mm = (day_secs / 60) % 60;
+    let ss = day_secs % 60;
+    let days = (secs / 86_400) as i64;
+    let z   = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y   = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp  = (5 * doy + 2) / 153;
+    let dd  = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let mo  = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let yr  = if mo <= 2 { y + 1 } else { y };
+    format!("{yr:04}-{mo:02}-{dd:02}T{hh:02}-{mm:02}-{ss:02}.{ms:03}Z")
+}
+
+/// Persist `data` (the bytes about to be overwritten) under
+/// `<exe>/snapshots/<utc-stamp>/<vfs_path>`. Best-effort: errors are logged and
+/// swallowed so a snapshot failure never aborts a flush.
+fn save_snapshot(vfs_path: &str, data: &[u8]) {
+    let Some(root) = snapshot_root() else {
+        warn!("snapshot {vfs_path}: cannot resolve exe directory");
+        return;
+    };
+    let mut dest = root.join(snapshot_stamp());
+    for part in vfs_path.split('/').filter(|s| !s.is_empty()) {
+        dest.push(part);
+    }
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!("snapshot {vfs_path}: mkdir {parent:?}: {e}");
+            return;
+        }
+    }
+    match std::fs::write(&dest, data) {
+        Ok(_)  => info!("snapshot {vfs_path} -> {dest:?} ({} bytes)", data.len()),
+        Err(e) => warn!("snapshot {vfs_path}: write {dest:?}: {e}"),
+    }
+}
+
 fn ino_for(path: &str) -> u64 {
     if path.is_empty() { return ROOT_INO; }
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -193,6 +257,16 @@ impl SharedFs {
         if !readonly {
             if let Err(e) = vfs.init_user_group("9000", std::path::Path::new(&papgt_path)) {
                 warn!("user-group bootstrap failed: {e}; create/unlink will return EROFS");
+            }
+            // Prune any user-group entries whose first segment collides with a
+            // synthetic root name -- editor temp-file leakage from older builds.
+            for p in vfs.user_group_paths() {
+                if is_under_virtual_root(&p) {
+                    warn!("user_group: pruning stale entry {p:?} (under virtual root)");
+                    if let Err(e) = vfs.remove_user_file(&p) {
+                        warn!("user_group: failed to prune {p:?}: {e}");
+                    }
+                }
             }
         }
         let decode_pool = rayon::ThreadPoolBuilder::new()
@@ -888,9 +962,22 @@ impl SharedFs {
         build_png_header(w, h)
     }
 
+    /// Drop the user's input bytes and the rendered output cache for a virtual
+    /// path after its underlying source has been rewritten. Called once the
+    /// recursive flush_path_sync(source) returns successfully -- subsequent
+    /// reads then re-render from the new source instead of returning the
+    /// pre-flush user input or the stale rendered cache.
+    fn invalidate_virtual_path(&self, virtual_path: &str) {
+        self.write_overlay.lock().unwrap().remove(virtual_path);
+        self.decode_cache.lock().unwrap().pop(&ino_for(virtual_path));
+    }
+
     fn flush_path_sync(&self, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(path);
-        self.write_mtimes.lock().unwrap().remove(path);
+        // Keep `write_mtimes[path]` populated past flush -- without it
+        // file_attr reverts to UNIX_EPOCH, and file-manager thumbnail caches
+        // (keyed on mtime) never invalidate between saves.
+        self.write_mtimes.lock().unwrap().insert(path.to_string(), SystemTime::now());
 
         // Prefab-view synth `mesh.fbx`: write FBX bytes to a temp file, import
         // back into a ParsedMesh, build new mesh bytes via the appropriate
@@ -945,6 +1032,7 @@ impl SharedFs {
                 Ok(new_bytes) => {
                     info!("flush mesh.fbx {path}: built {}B for {mesh_path}", new_bytes.len());
                     self.flush_path_sync(&mesh_path, new_bytes);
+                    self.invalidate_virtual_path(path);
                 }
                 Err(e) => {
                     let msg = format!("build_mesh {path}: {e}");
@@ -963,6 +1051,7 @@ impl SharedFs {
                             info!("flush {path}: paloc JSONL -> {}B binary, repacking {}",
                                   binary.len(), vf.source_path);
                             self.flush_path_sync(&vf.source_path, binary);
+                            self.invalidate_virtual_path(path);
                         }
                         None => {
                             let msg = format!("paloc parse failed: {path}");
@@ -985,6 +1074,7 @@ impl SharedFs {
                             info!("flush {path}: PNG -> {}B DDS, repacking {}",
                                   dds.len(), vf.source_path);
                             self.flush_path_sync(&vf.source_path, dds);
+                            self.invalidate_virtual_path(path);
                         }
                         None => {
                             let msg = format!("PNG->DDS failed: {path}");
@@ -1005,6 +1095,9 @@ impl SharedFs {
             // Either an existing user file (replace) or a brand-new path the
             // current `create()` registered without writing yet (the lookup
             // miss tells us the file isn't backed by any shipped PAMT).
+            if let Some(prev) = self.vfs.read_user_file(path) {
+                save_snapshot(path, &prev);
+            }
             match self.vfs.create_user_file(path, &data) {
                 Ok(entry) => {
                     info!("user_group: persisted {path} ({} bytes -> orig_size={})",
@@ -1025,6 +1118,11 @@ impl SharedFs {
             Some(e) => e,
             None    => return,
         };
+        // Snapshot the original shipped bytes before the repack rewrites them.
+        match self.vfs.read_entry(&entry) {
+            Ok(prev) => save_snapshot(path, &prev),
+            Err(e)   => warn!("snapshot {path}: read source for snapshot: {e}"),
+        }
         let group_dir = Path::new(&entry.paz_file)
             .parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
             .unwrap_or("").to_string();

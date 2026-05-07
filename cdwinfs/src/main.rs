@@ -7,6 +7,7 @@ use cdcore::VfsManager;
 
 mod config;
 mod fs;
+mod prefab_view;
 mod setup;
 mod tui;
 mod virtual_files;

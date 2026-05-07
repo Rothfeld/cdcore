@@ -7,6 +7,7 @@
 //!   * memory:       ~300 MB less than the recursive HashMap tree for 1.4 M files
 //!   * parallelism:  PAMT parsing is fully parallel; one batch write lock at merge
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -23,6 +24,24 @@ use crate::error::{ParseError, Result};
 
 /// (PamtFileEntry, group_dir)
 type Entry = (PamtFileEntry, String);
+
+/// Strip a `@<group>` suffix from the first path segment, returning the
+/// canonical (alias-free) form. `ui@9000/foo/bar.png` → `ui/foo/bar.png`;
+/// `ui/foo/bar.png` → `ui/foo/bar.png` (unchanged). The `@` is only
+/// recognised in the first segment, matching what
+/// `VfsManager::expose_multi_package_dirs` produces.
+fn strip_group_alias(path: &str) -> Cow<'_, str> {
+    let first_slash = path.find('/').unwrap_or(path.len());
+    let head = &path[..first_slash];
+    if let Some(at) = head.find('@') {
+        let mut out = String::with_capacity(at + (path.len() - first_slash));
+        out.push_str(&head[..at]);
+        out.push_str(&path[first_slash..]);
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(path)
+    }
+}
 
 pub struct VfsManager {
     packages_path: PathBuf,
@@ -89,10 +108,13 @@ impl VfsManager {
 
     /// Whether `path` is currently owned by the user group (i.e. created via
     /// [`Self::create_user_file`]). Returns false for shipped paths.
+    /// Accepts the `<dir>@<group>/...` alias form too -- the alias is stripped
+    /// to the canonical path before checking the user group.
     pub fn is_user_path(&self, path: &str) -> bool {
         let norm = path.replace('\\', "/");
+        let canonical = strip_group_alias(&norm);
         let slot = self.user_group.lock().unwrap();
-        slot.as_ref().is_some_and(|g| g.contains(&norm))
+        slot.as_ref().is_some_and(|g| g.contains(canonical.as_ref()))
     }
 
     /// Create or replace a user file. Rejects paths that already exist as
@@ -131,26 +153,50 @@ impl VfsManager {
         Ok(entry)
     }
 
-    /// Remove a user file. Returns true if it existed.
+    /// Remove a user file. Returns true if it existed. Accepts both the
+    /// canonical path and the `<dir>@<group>/...` alias; both tree entries
+    /// (canonical + alias) are dropped on success.
     pub fn remove_user_file(&self, path: &str) -> Result<bool> {
         let norm = path.replace('\\', "/");
+        let canonical = strip_group_alias(&norm).into_owned();
         let mut slot = self.user_group.lock().unwrap();
         let ug = slot.as_mut().ok_or_else(|| {
             ParseError::Other("user group not initialised".into())
         })?;
-        let removed = ug.remove(&norm)?;
+        let removed = ug.remove(&canonical)?;
+        let group_id = ug.group_id.clone();
         drop(slot);
         if removed {
-            self.tree.write().unwrap().remove(&norm);
+            let mut tree = self.tree.write().unwrap();
+            tree.remove(&canonical);
+            // Drop the multi-package alias too (if there is one). The alias
+            // tree entry was inserted by `expose_multi_package_dirs` and shares
+            // the canonical's PamtFileEntry; without this, listings under
+            // `<dir>@<group>/` keep the deleted file visible until remount.
+            if let Some(slash) = canonical.find('/') {
+                let alias = format!("{}@{}{}", &canonical[..slash], group_id, &canonical[slash..]);
+                tree.remove(&alias);
+            }
         }
         Ok(removed)
     }
 
     /// Read a user file's bytes (decrypted + decompressed). Returns None for
-    /// non-user paths.
+    /// non-user paths. Accepts the alias form.
     pub fn read_user_file(&self, path: &str) -> Option<Vec<u8>> {
         let norm = path.replace('\\', "/");
-        self.user_group.lock().unwrap().as_ref().and_then(|g| g.read(&norm))
+        let canonical = strip_group_alias(&norm);
+        self.user_group.lock().unwrap().as_ref().and_then(|g| g.read(canonical.as_ref()))
+    }
+
+    /// Snapshot of every path currently managed by the user group. Empty if
+    /// the user group has not been initialised. Used by callers that need to
+    /// reconcile user-group state on startup (e.g. pruning stale entries
+    /// whose first path segment collides with a synthetic root name).
+    pub fn user_group_paths(&self) -> Vec<String> {
+        self.user_group.lock().unwrap().as_ref()
+            .map(|g| g.paths())
+            .unwrap_or_default()
     }
 
     /// Mark `dir` as a synthetic empty directory so `mkdir` survives until
