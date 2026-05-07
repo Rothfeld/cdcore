@@ -184,6 +184,17 @@ impl SharedFs {
         let packages_path = vfs.packages_path().to_string();
         let papgt_path    = format!("{packages_path}/meta/0.papgt");
         let repack_engine = RepackEngine::new(&packages_path);
+
+        // Bootstrap (or open) the user package group so create/unlink land in
+        // a real on-disk PAMT the game also sees. Default group "9000" sorts
+        // after every shipped group so its PAPGT slot is always "the next
+        // free position". Errors are demoted to a warning -- a read-only
+        // user group still permits browsing, just no writes.
+        if !readonly {
+            if let Err(e) = vfs.init_user_group("9000", std::path::Path::new(&papgt_path)) {
+                warn!("user-group bootstrap failed: {e}; create/unlink will return EROFS");
+            }
+        }
         let decode_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))
             .thread_name(|i| format!("cdfuse-decode-{i}"))
@@ -987,6 +998,29 @@ impl SharedFs {
             return;
         }
 
+        // User-group paths bypass the shared repack engine: their PAMT is
+        // rewritten from scratch on every change, and they own a single
+        // private PAZ. Forward the bytes to UserGroup::add via VfsManager.
+        if self.vfs.is_user_path(path) || self.vfs.user_group_ready() && self.vfs.lookup(path).is_none() {
+            // Either an existing user file (replace) or a brand-new path the
+            // current `create()` registered without writing yet (the lookup
+            // miss tells us the file isn't backed by any shipped PAMT).
+            match self.vfs.create_user_file(path, &data) {
+                Ok(entry) => {
+                    info!("user_group: persisted {path} ({} bytes -> orig_size={})",
+                          data.len(), entry.orig_size);
+                    self.push_event(format!("[ok]  user_group {path}"));
+                    self.cache_put(ino_for(path), Arc::from(data));
+                }
+                Err(e) => {
+                    let msg = format!("user_group write failed for {path}: {e}");
+                    warn!("{msg}");
+                    self.push_event(format!("[err] {msg}"));
+                }
+            }
+            return;
+        }
+
         let entry = match self.vfs.lookup(path) {
             Some(e) => e,
             None    => return,
@@ -1214,13 +1248,19 @@ impl Filesystem for CdFs {
                 return;
             }
         }
+        // Last-chance: a path registered via `create()` that hasn't flushed
+        // yet (no PAMT entry, just an overlay). Reject when the overlay is
+        // also absent so renamed-away paths don't ghost-resolve.
         if self.paths.get(&ino_for(&child)).is_some_and(|(_, d)| !*d) {
-            let ino  = self.ensure_path(&child, false);
-            let size = self.shared.write_overlay.lock().unwrap()
-                .get(&child).map(|d| d.len() as u64).unwrap_or(0);
-            let attr = self.shared.file_attr(ino, &child, size);
-            reply.entry(&Duration::ZERO, &attr, 0);
-            return;
+            let has_overlay = self.shared.write_overlay.lock().unwrap().contains_key(&child);
+            if has_overlay {
+                let ino  = self.ensure_path(&child, false);
+                let size = self.shared.write_overlay.lock().unwrap()
+                    .get(&child).map(|d| d.len() as u64).unwrap_or(0);
+                let attr = self.shared.file_attr(ino, &child, size);
+                reply.entry(&Duration::ZERO, &attr, 0);
+                return;
+            }
         }
         reply.entry(&TTL, &ABSENT_ATTR, 0);
     }
@@ -1403,9 +1443,76 @@ impl Filesystem for CdFs {
         };
         let src = SharedFs::child_path(&src_parent, name);
         let dst = SharedFs::child_path(&dst_parent, newname);
+
+        // Refuse renames that would create or remove a shipped file. Only
+        // user-group paths can be renamed; shipped paths are immutable.
+        let src_is_user = self.shared.vfs.is_user_path(&src);
+        let src_is_shipped = !src_is_user && self.shared.vfs.lookup(&src).is_some();
+        let dst_is_shipped = self.shared.vfs.lookup(&dst).is_some()
+            && !self.shared.vfs.is_user_path(&dst);
+        if src_is_shipped || dst_is_shipped {
+            reply.error(libc::EACCES);
+            return;
+        }
+
         let dst_ino = self.ensure_path(&dst, false);
+
+        // User-group rename: read the on-disk bytes, drop the old PAMT entry,
+        // write the new entry under `dst`. The PAZ blob for the old entry
+        // becomes orphaned (no compaction yet); same as add-then-remove.
+        if src_is_user {
+            // Prefer freshest data: pending overlay > user_group on-disk.
+            let data = self.shared.write_overlay.lock().unwrap().get(&src).cloned()
+                .or_else(|| self.shared.vfs.read_user_file(&src));
+            let Some(data) = data else {
+                // No data anywhere -- treat as ENOENT.
+                reply.error(ENOENT);
+                return;
+            };
+            if let Err(e) = self.shared.vfs.create_user_file(&dst, &data) {
+                let msg = format!("rename {src} -> {dst}: {e}");
+                warn!("{msg}");
+                self.shared.push_event(format!("[err] {msg}"));
+                reply.error(libc::EIO);
+                return;
+            }
+            // Remove the old entry only after the new one has been persisted.
+            if let Err(e) = self.shared.vfs.remove_user_file(&src) {
+                let msg = format!("rename cleanup of {src}: {e}");
+                warn!("{msg}");
+                self.shared.push_event(format!("[err] {msg}"));
+                // Don't fail the rename: dst exists, src is stale; the next
+                // remount will see whichever is in PAMT.
+            }
+            // The kernel keeps the source's inode after a successful rename
+            // and uses it to read the new name. Repoint the src ino at dst,
+            // and mirror the same mapping under dst's hash for fresh
+            // lookups. Cache the data under both so reads in either form
+            // hit fast.
+            let src_ino = ino_for(&src);
+            self.paths.insert(src_ino, (Box::from(dst.as_str()), false));
+            self.paths.insert(dst_ino, (Box::from(dst.as_str()), false));
+            self.shared.cache_put(src_ino, Arc::from(data.clone()));
+            self.shared.cache_put(dst_ino, Arc::from(data.clone()));
+            self.shared.write_overlay.lock().unwrap().remove(&src);
+            self.shared.write_overlay.lock().unwrap().insert(dst.clone(), data);
+            self.shared.pending_paths.lock().unwrap().remove(&src);
+            self.shared.write_mtimes.lock().unwrap().remove(&src);
+            self.shared.write_mtimes.lock().unwrap().insert(dst.clone(), SystemTime::now());
+            self.shared.dir_cache.write().unwrap().remove(&ino_for(&src_parent));
+            self.shared.dir_cache.write().unwrap().remove(&ino_for(&dst_parent));
+            reply.ok();
+            return;
+        }
+
+        // Pure-overlay rename (source isn't yet persisted to user_group):
+        // just shift the in-memory state. The next flush will land at `dst`.
+        let src_ino = ino_for(&src);
         let moved = self.shared.write_overlay.lock().unwrap().remove(&src);
         if let Some(data) = moved {
+            self.paths.insert(src_ino, (Box::from(dst.as_str()), false));
+            self.paths.insert(dst_ino, (Box::from(dst.as_str()), false));
+            self.shared.cache_put(src_ino, Arc::from(data.clone()));
             self.shared.cache_put(dst_ino, Arc::from(data.clone()));
             self.shared.write_overlay.lock().unwrap().insert(dst.clone(), data);
         }
@@ -1474,17 +1581,83 @@ impl Filesystem for CdFs {
             reply.ok();
             return;
         }
-        if self.shared.vfs.lookup(&child).is_none()
-            && !self.paths.get(&ino).is_some_and(|(_, d)| !*d)
-        {
+        // Delete is only permitted for files in the user package group.
+        // Shipped paths come back EACCES so users can't accidentally remove
+        // game data by typoing rm.
+        let is_user = self.shared.vfs.is_user_path(&child);
+        if !is_user {
+            if self.shared.vfs.lookup(&child).is_some() {
+                reply.error(libc::EACCES);
+                return;
+            }
+            // Path isn't shipped, isn't user-owned. If it's just a registered
+            // pending-write file with no on-disk backing, drop the overlay.
+            if self.paths.get(&ino).is_some_and(|(_, d)| !*d) {
+                self.shared.write_overlay.lock().unwrap().remove(&child);
+                self.shared.write_mtimes.lock().unwrap().remove(&child);
+                self.shared.pending_paths.lock().unwrap().remove(&child);
+                self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
+                reply.ok();
+                return;
+            }
             reply.error(ENOENT);
             return;
         }
-        self.shared.vfs.remove_entry(&child);
+        if let Err(e) = self.shared.vfs.remove_user_file(&child) {
+            let msg = format!("user_group unlink {child}: {e}");
+            warn!("{msg}");
+            self.shared.push_event(format!("[err] {msg}"));
+            reply.error(libc::EIO);
+            return;
+        }
         self.shared.decode_cache.lock().unwrap().pop(&ino);
         self.shared.write_overlay.lock().unwrap().remove(&child);
         self.shared.write_mtimes.lock().unwrap().remove(&child);
         self.shared.pending_paths.lock().unwrap().remove(&child);
+        self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
+        reply.ok();
+    }
+
+    fn mkdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr,
+             _mode: u32, _umask: u32, reply: ReplyEntry) {
+        self.drain();
+        let parent_path = match self.path_of(parent) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        let child = SharedFs::child_path(&parent_path, name);
+        // Refuse if a shipped/user path or another synth-dir already lives there.
+        if self.shared.vfs.lookup(&child).is_some() || self.shared.vfs.dir_exists(&child) {
+            reply.error(libc::EEXIST);
+            return;
+        }
+        self.shared.vfs.add_synth_dir(&child);
+        let ino = self.ensure_path(&child, true);
+        self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
+        let attr = self.shared.dir_attr(ino);
+        reply.entry(&Duration::ZERO, &attr, 0);
+    }
+
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        self.drain();
+        let parent_path = match self.path_of(parent) {
+            Some(p) => p.to_string(),
+            None    => { reply.error(ENOENT); return; }
+        };
+        let child = SharedFs::child_path(&parent_path, name);
+        // Reject for any directory still backed by real entries -- only
+        // synthetic empty user dirs are removable.
+        let prefix = format!("{}/", child);
+        let has_children = self.shared.vfs.list_dir(&child).iter().any(|_| true)
+            || self.shared.write_overlay.lock().unwrap().keys().any(|p| p.starts_with(&prefix));
+        if has_children {
+            reply.error(libc::ENOTEMPTY);
+            return;
+        }
+        if !self.shared.vfs.remove_synth_dir(&child) {
+            reply.error(libc::EACCES);
+            return;
+        }
         self.shared.dir_cache.write().unwrap().remove(&ino_for(&parent_path));
         reply.ok();
     }

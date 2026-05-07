@@ -9,13 +9,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use dashmap::DashMap;
 use rayon::prelude::*;
 
 use crate::archive::pamt::{parse_pamt, PamtData, PamtFileEntry};
 use crate::archive::paz;
+use crate::archive::user_group::UserGroup;
 use crate::compression;
 use crate::crypto;
 use crate::error::{ParseError, Result};
@@ -31,6 +32,14 @@ pub struct VfsManager {
     loaded: DashMap<String, ()>,
     /// Raw PAMT data kept for repack / checksum operations.
     pamt_cache: DashMap<String, PamtData>,
+    /// User-created files via a dedicated package group (default `9000`).
+    /// `None` until [`VfsManager::init_user_group`] is called.
+    user_group: Mutex<Option<UserGroup>>,
+    /// Synthetic empty directories (mkdir-only). Persisted across mount
+    /// sessions when at least one user file lives under them; otherwise
+    /// they vanish on unmount. Stored as the directory path without trailing
+    /// slash. Read by `dir_exists` and `list_dir_*` to decide visibility.
+    synth_dirs: RwLock<std::collections::HashSet<String>>,
 }
 
 impl VfsManager {
@@ -46,7 +55,123 @@ impl VfsManager {
             tree: Arc::new(RwLock::new(BTreeMap::new())),
             loaded: DashMap::new(),
             pamt_cache: DashMap::new(),
+            user_group: Mutex::new(None),
+            synth_dirs: RwLock::new(std::collections::HashSet::new()),
         })
+    }
+
+    // -- User-created files (group 9000 by default) --------------------------
+
+    /// Bootstrap or open the user package group (default `9000`). Idempotent;
+    /// safe to call once per mount. Inserts any pre-existing user files into
+    /// the in-memory tree so they show up in `lookup` and `list_dir_*`.
+    pub fn init_user_group(&self, group_id: &str, papgt_path: &Path) -> Result<()> {
+        let mut slot = self.user_group.lock().unwrap();
+        if slot.is_some() {
+            return Ok(());
+        }
+        let ug = UserGroup::open_or_create(&self.packages_path, papgt_path, group_id)?;
+        // Inject existing entries into the tree.
+        let entries = ug.all_entries();
+        let group_id_owned = ug.group_id.clone();
+        let mut tree = self.tree.write().unwrap();
+        for e in entries {
+            tree.insert(e.path.clone(), (e, group_id_owned.clone()));
+        }
+        *slot = Some(ug);
+        Ok(())
+    }
+
+    /// Whether the user group has been initialised on this manager.
+    pub fn user_group_ready(&self) -> bool {
+        self.user_group.lock().unwrap().is_some()
+    }
+
+    /// Whether `path` is currently owned by the user group (i.e. created via
+    /// [`Self::create_user_file`]). Returns false for shipped paths.
+    pub fn is_user_path(&self, path: &str) -> bool {
+        let norm = path.replace('\\', "/");
+        let slot = self.user_group.lock().unwrap();
+        slot.as_ref().is_some_and(|g| g.contains(&norm))
+    }
+
+    /// Create or replace a user file. Rejects paths that already exist as
+    /// shipped entries (the user group never shadows shipped data). Returns
+    /// the new PamtFileEntry.
+    pub fn create_user_file(&self, path: &str, data: &[u8]) -> Result<PamtFileEntry> {
+        let norm = path.replace('\\', "/");
+        // Reject if a shipped entry already lives here.
+        {
+            let tree = self.tree.read().unwrap();
+            if let Some((_, g)) = tree.get(&norm) {
+                let user_g = self.user_group.lock().unwrap()
+                    .as_ref().map(|u| u.group_id.clone())
+                    .unwrap_or_default();
+                if g != &user_g {
+                    return Err(ParseError::Other(format!(
+                        "shipped file already exists at {norm}; user group will not shadow it"
+                    )));
+                }
+            }
+        }
+
+        let mut slot = self.user_group.lock().unwrap();
+        let ug = slot.as_mut().ok_or_else(|| {
+            ParseError::Other("user group not initialised; call init_user_group first".into())
+        })?;
+        ug.add(&norm, data)?;
+        let entry = ug.entry_for(&norm).ok_or_else(|| {
+            ParseError::Other("user_group::add succeeded but entry_for missed".into())
+        })?;
+        let group_id = ug.group_id.clone();
+        drop(slot);
+
+        let mut tree = self.tree.write().unwrap();
+        tree.insert(norm.clone(), (entry.clone(), group_id));
+        Ok(entry)
+    }
+
+    /// Remove a user file. Returns true if it existed.
+    pub fn remove_user_file(&self, path: &str) -> Result<bool> {
+        let norm = path.replace('\\', "/");
+        let mut slot = self.user_group.lock().unwrap();
+        let ug = slot.as_mut().ok_or_else(|| {
+            ParseError::Other("user group not initialised".into())
+        })?;
+        let removed = ug.remove(&norm)?;
+        drop(slot);
+        if removed {
+            self.tree.write().unwrap().remove(&norm);
+        }
+        Ok(removed)
+    }
+
+    /// Read a user file's bytes (decrypted + decompressed). Returns None for
+    /// non-user paths.
+    pub fn read_user_file(&self, path: &str) -> Option<Vec<u8>> {
+        let norm = path.replace('\\', "/");
+        self.user_group.lock().unwrap().as_ref().and_then(|g| g.read(&norm))
+    }
+
+    /// Mark `dir` as a synthetic empty directory so `mkdir` survives until
+    /// either an `rmdir` removes it or a child file pins it implicitly.
+    pub fn add_synth_dir(&self, dir: &str) {
+        let norm = dir.trim_end_matches('/').replace('\\', "/");
+        if !norm.is_empty() {
+            self.synth_dirs.write().unwrap().insert(norm);
+        }
+    }
+
+    /// Drop a synthetic empty directory. No-op if not registered.
+    pub fn remove_synth_dir(&self, dir: &str) -> bool {
+        let norm = dir.trim_end_matches('/').replace('\\', "/");
+        self.synth_dirs.write().unwrap().remove(&norm)
+    }
+
+    /// Whether `dir` is a registered synthetic empty directory.
+    pub fn is_synth_dir(&self, dir: &str) -> bool {
+        let norm = dir.trim_end_matches('/').replace('\\', "/");
+        self.synth_dirs.read().unwrap().contains(&norm)
     }
 
     /// Load one package group (idempotent).
@@ -206,8 +331,13 @@ impl VfsManager {
 
     /// Returns `true` if `path` is a non-empty directory in the VFS.
     /// O(log n) -- seeks to the first entry under the prefix, checks one node.
+    /// Also matches synthetic empty user dirs created via `add_synth_dir`.
     pub fn dir_exists(&self, path: &str) -> bool {
-        let prefix = format!("{}/", path.replace('\\', "/"));
+        let norm = path.replace('\\', "/");
+        if self.is_synth_dir(&norm) {
+            return true;
+        }
+        let prefix = format!("{}/", norm);
         let tree = self.tree.read().unwrap();
         tree.range(prefix.clone()..)
             .next()
@@ -247,7 +377,20 @@ impl VfsManager {
     }
 
     /// Full decrypt + decompress pipeline for a file entry.
+    /// Routes user-group entries through the UserGroup helper since their
+    /// PAMT layout doesn't carry a flags byte for paz_index.
     pub fn read_entry(&self, entry: &PamtFileEntry) -> Result<Vec<u8>> {
+        if let Some(ug) = self.user_group.lock().unwrap().as_ref() {
+            if ug.contains(&entry.path) {
+                return ug.read(&entry.path).ok_or_else(|| ParseError::Other(format!(
+                    "user_group read failed for {}", entry.path
+                )));
+            }
+        }
+        self.read_entry_inner(entry)
+    }
+
+    fn read_entry_inner(&self, entry: &PamtFileEntry) -> Result<Vec<u8>> {
         let read_size = if entry.compressed() {
             entry.comp_size as usize
         } else {
