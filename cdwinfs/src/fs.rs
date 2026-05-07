@@ -1339,14 +1339,19 @@ impl FileSystemContext for CdWinFs {
     }
 
     fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
-        let delete_pending = context.delete_pending.load(Ordering::Relaxed);
-        let delete_flag    = flags & FSP_CLEANUP_DELETE != 0;
-        if delete_flag || delete_pending {
-            info!("cleanup {:?}: flags=0x{flags:08x} delete_flag={delete_flag} \
-                   delete_pending={delete_pending} is_dir={}",
-                  context.path, context.is_dir);
+        // FspCleanupDelete is set when EITHER `set_delete(true)` was called on
+        // this handle OR the handle was opened with FILE_DELETE_ON_CLOSE.
+        // Don't AND with `delete_pending` -- the latter case never invokes
+        // set_delete, so requiring both silently drops half the delete paths
+        // (IFileOperation, recycle-bin moves, antivirus probes, ...).
+        let delete_flag = flags & FSP_CLEANUP_DELETE != 0;
+        if delete_flag {
+            info!("cleanup {:?}: flags=0x{flags:08x} delete_pending={} is_dir={}",
+                  context.path,
+                  context.delete_pending.load(Ordering::Relaxed),
+                  context.is_dir);
         }
-        if delete_flag && delete_pending {
+        if delete_flag {
             let path = &context.path;
             // rmdir: only synthetic empty user dirs are removable.
             if context.is_dir {

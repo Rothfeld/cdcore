@@ -89,7 +89,14 @@ impl VfsManager {
         if slot.is_some() {
             return Ok(());
         }
-        let ug = UserGroup::open_or_create(&self.packages_path, papgt_path, group_id)?;
+        let mut ug = UserGroup::open_or_create(&self.packages_path, papgt_path, group_id)?;
+        // Older builds stored the alias form (`ui@9000/...`) when a user
+        // created a file while browsing the aliased view. Those entries
+        // can't be deleted because remove_user_file strips the alias before
+        // matching. Migrate them to canonical paths now so deletes work
+        // and the same file is reachable through both `ui/...` and
+        // `ui@9000/...` after expose_multi_package_dirs runs.
+        ug.migrate_aliased_paths()?;
         // Inject existing entries into the tree.
         let entries = ug.all_entries();
         let group_id_owned = ug.group_id.clone();
@@ -120,18 +127,24 @@ impl VfsManager {
     /// Create or replace a user file. Rejects paths that already exist as
     /// shipped entries (the user group never shadows shipped data). Returns
     /// the new PamtFileEntry.
+    ///
+    /// Accepts both the canonical path and the `<dir>@<group>/...` alias
+    /// (e.g. when Explorer is browsing the aliased view): the alias is
+    /// stripped before storage so user_group always holds the canonical
+    /// form, and `remove_user_file` can find the entry by either name.
     pub fn create_user_file(&self, path: &str, data: &[u8]) -> Result<PamtFileEntry> {
         let norm = path.replace('\\', "/");
-        // Reject if a shipped entry already lives here.
+        let canonical = strip_group_alias(&norm).into_owned();
+        // Reject if a shipped entry already lives at the canonical path.
         {
             let tree = self.tree.read().unwrap();
-            if let Some((_, g)) = tree.get(&norm) {
+            if let Some((_, g)) = tree.get(&canonical) {
                 let user_g = self.user_group.lock().unwrap()
                     .as_ref().map(|u| u.group_id.clone())
                     .unwrap_or_default();
                 if g != &user_g {
                     return Err(ParseError::Other(format!(
-                        "shipped file already exists at {norm}; user group will not shadow it"
+                        "shipped file already exists at {canonical}; user group will not shadow it"
                     )));
                 }
             }
@@ -141,15 +154,22 @@ impl VfsManager {
         let ug = slot.as_mut().ok_or_else(|| {
             ParseError::Other("user group not initialised; call init_user_group first".into())
         })?;
-        ug.add(&norm, data)?;
-        let entry = ug.entry_for(&norm).ok_or_else(|| {
+        ug.add(&canonical, data)?;
+        let entry = ug.entry_for(&canonical).ok_or_else(|| {
             ParseError::Other("user_group::add succeeded but entry_for missed".into())
         })?;
         let group_id = ug.group_id.clone();
         drop(slot);
 
         let mut tree = self.tree.write().unwrap();
-        tree.insert(norm.clone(), (entry.clone(), group_id));
+        tree.insert(canonical.clone(), (entry.clone(), group_id.clone()));
+        // Mirror `expose_multi_package_dirs` for this single file so that
+        // listings under `<top>@<group>/` see the new entry without a full
+        // re-scan. The alias just shadows the canonical; deletes drop both.
+        if let Some(slash) = canonical.find('/') {
+            let alias = format!("{}@{}{}", &canonical[..slash], group_id, &canonical[slash..]);
+            tree.insert(alias, (entry.clone(), group_id));
+        }
         Ok(entry)
     }
 

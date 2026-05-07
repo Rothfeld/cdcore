@@ -155,6 +155,28 @@ impl UserGroup {
         Ok(())
     }
 
+    /// Rewrite any path that has an `@<group>` alias suffix on its first
+    /// segment to the canonical alias-free form. Older builds of
+    /// `create_user_file` accepted the alias form verbatim from Explorer
+    /// (e.g. when a user copied a file while browsing `ui@9000/`), which
+    /// then made `remove_user_file` -- which strips the alias before
+    /// matching -- unable to find the entry. Idempotent; only flushes the
+    /// PAMT when at least one entry actually moved.
+    pub fn migrate_aliased_paths(&mut self) -> Result<()> {
+        let mut renamed = 0usize;
+        for f in self.files.iter_mut() {
+            if let Some(canon) = canonicalize_first_segment(&f.path) {
+                f.path = canon;
+                renamed += 1;
+            }
+        }
+        if renamed > 0 {
+            self.flush_pamt()?;
+            self.update_papgt_crc()?;
+        }
+        Ok(())
+    }
+
     /// Drop a managed file. The PAZ data stays orphaned; only the PAMT entry
     /// disappears (and with it, the file's visibility).
     pub fn remove(&mut self, path: &str) -> Result<bool> {
@@ -387,6 +409,18 @@ pub fn serialize_user_pamt(files: &[UserFile], paz_crc: u32, paz_size: u32) -> V
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
+
+/// If `path`'s first segment has an `@<group>` suffix
+/// (e.g. `ui@9000/foo.png`), return the canonical alias-free form
+/// (`ui/foo.png`). Returns None if the first segment doesn't contain `@`.
+/// Mirrors `vfs::manager::strip_group_alias` but reproduced here to avoid
+/// a cross-module visibility dance for a few-line helper.
+fn canonicalize_first_segment(path: &str) -> Option<String> {
+    let first_slash = path.find('/').unwrap_or(path.len());
+    let head = &path[..first_slash];
+    let at = head.find('@')?;
+    Some(format!("{}{}", &head[..at], &path[first_slash..]))
+}
 
 /// `fs::write` via tmpfile + rename so partial writes never appear on disk.
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
