@@ -768,15 +768,8 @@ pub fn decode_dds_to_rgba(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
 // ---------------------------------------------------------------------------
 
 /// Whether `encode_dds_matching` would accept a DDS of this format. True
-/// only for BC1/BC3/BC4/BC5 today -- the four block formats with
-/// implementations in this module. Used by the FS layer to decide whether
-/// to expose a `.dds.png/` virtual entry: read-only previews of files we
-/// can't write back are a trap (the user's PNG edit silently fails on save
-/// because no encoder matches), so we hide HDR / BC6H / BC7 / float / etc.
-/// from the listing entirely.
-///
-/// Cheap: only reads the 128-byte DDS header (plus 20-byte DX10 extension
-/// when present). Returns false on parse error.
+/// only for BC1/BC3/BC4/BC5 -- the four block formats this module can
+/// write. Cheap: only reads the DDS header. Returns false on parse error.
 pub fn is_encodable_format(data: &[u8]) -> bool {
     match parse_header(data) {
         Ok(hdr) => matches!(

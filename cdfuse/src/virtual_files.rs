@@ -20,7 +20,7 @@
 //!   virtual_root_dirs()   -> iterator over the top-level virtual dir names
 
 use log::warn;
-use cdcore::formats::image::dds::{classify_dds, decode_dds_to_rgba, encode_dds_matching, DdsShape};
+use cdcore::formats::image::dds::{classify_dds, decode_dds_to_rgba, encode_dds_matching, is_encodable_format, DdsShape};
 use cdcore::formats::data::{parse_paloc, serialize_paloc, PalocEntry, parse_pabgb, FieldValue};
 use cdcore::formats::scene::parse_prefab;
 use cdcore::formats::animation::parse_paa_metabin;
@@ -277,6 +277,15 @@ pub fn render_dds_png(data: &[u8], path: &str) -> Option<Vec<u8>> {
             return None;
         }
         Err(e) => { warn!("render_dds_png {path}: classify: {e}"); return None; }
+    }
+    // Refuse formats whose write-back path isn't implemented (BC6H/BC7/HDR
+    // floats / etc.). Otherwise the decoder produces stub or tone-mapped
+    // output that the user sees as a broken/garbage thumbnail, and any edit
+    // they save in Paint dies silently in encode_dds_matching. Same shape
+    // as the round-trip gate above: render fails at read time, no preview.
+    if !is_encodable_format(data) {
+        warn!("render_dds_png {path}: refusing -- format not roundtrippable through encode_dds_matching");
+        return None;
     }
     let (width, height, rgba) = decode_dds_to_rgba(data)
         .map_err(|e| warn!("render_dds_png {path}: {e}")).ok()?;

@@ -1052,20 +1052,7 @@ impl SharedFs {
                     format!("{name}{}", vdir.suffix)
                 };
                 let cvpath = child_path(vpath, &virt_name);
-                // Prefer the rendered-output size if we've already cached it.
-                // Without this, virtual files whose rendered form is LARGER
-                // than the source (e.g. a 2000x1800 BC3 DDS at 3.6 MB renders
-                // to a 4.4 MB PNG -- gamma_bright.dds.png) get listed at the
-                // source size, and Windows' thumbnailer budgets its read to
-                // that and hands the PNG decoder a truncated stream. Also
-                // checks the write_overlay so freshly-saved files that
-                // haven't yet committed to the cache still report their
-                // user-supplied length.
-                let size = self.write_overlay.lock().unwrap()
-                    .get(&cvpath).map(|d| d.len() as u64)
-                    .or_else(|| self.cache_get(ino_for(&cvpath)).map(|d| d.len() as u64))
-                    .unwrap_or(orig_size as u64);
-                let fi = self.file_info(&cvpath, size);
+                let fi = self.file_info(&cvpath, orig_size as u64);
                 out.push(DirEntry { name: virt_name, file_info: fi });
             }
         }
