@@ -2,7 +2,7 @@
 
 | Crate | Platform | Description |
 |-------|----------|-------------|
-| [`cdcore`](#cdcore) | any | Rust library -- VFS, parsers, crypto, audio, DDS; exposed to Python via PyO3 |
+| [`cdcore`](#cdcore) | any | Rust library -- VFS, parsers, decryption, audio, DDS; exposed to Python via PyO3 |
 | ├─ [`cdfuse`](#cdfuse-linux--cdwinfs-windows) | Linux | FUSE filesystem mount for Crimson Desert archives |
 | └─ [`cdwinfs`](#cdfuse-linux--cdwinfs-windows) | Windows | WinFSP filesystem mount for Crimson Desert archives (GPL-3.0) |
 

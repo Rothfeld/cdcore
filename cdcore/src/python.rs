@@ -936,6 +936,76 @@ fn build_pac_from_obj(
     Ok(PyBytes::new(py, &bytes).unbind())
 }
 
+// ---- FBX export (textured / skinned) -----------------------------------------------------------
+//
+// Wraps formats::mesh::fbx::{submeshes_to_textured_fbx, submeshes_to_skinned_fbx}.
+// `textures` is a list aligned 1:1 with `submeshes`; each entry is either None
+// (untextured submesh, gets the flat-grey material) or
+// (png_relative_path, png_absolute_path) -- both go straight into the FBX
+// Texture/Video nodes that Blender's importer reads. The PNG bytes themselves
+// must already be on disk at `png_absolute_path` before re-import time;
+// `png_relative_path` is what the FBX `RelativeFilename` field stores.
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+fn export_fbx_textured(
+    submeshes: Vec<PyRef<'_, PySubMesh>>,
+    mesh_name: &str,
+    textures: Vec<Option<(String, String)>>,
+    out_path: &str,
+) -> PyResult<()> {
+    if submeshes.len() != textures.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("submeshes ({}) and textures ({}) length mismatch",
+                    submeshes.len(), textures.len())
+        ));
+    }
+    let sm_refs: Vec<&mesh::SubMesh> = submeshes.iter().map(|s| &s.inner).collect();
+    let tex_refs: Vec<Option<mesh::TextureRef<'_>>> = textures.iter().map(|t| {
+        t.as_ref().map(|(rel, abs)| mesh::TextureRef {
+            png_relative_path: rel.as_str(),
+            png_absolute_path: abs.as_str(),
+        })
+    }).collect();
+    let bytes = mesh::submeshes_to_textured_fbx(&sm_refs, mesh_name, &tex_refs);
+    std::fs::write(out_path, &bytes).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("write {}: {}", out_path, e))
+    })
+}
+
+#[gen_stub_pyfunction]
+#[pyfunction]
+#[pyo3(signature = (submeshes, mesh_name, skeleton, textures, out_path, scale = 1.0))]
+fn export_fbx_skinned(
+    submeshes: Vec<PyRef<'_, PySubMesh>>,
+    mesh_name: &str,
+    skeleton: PyRef<'_, PySkeleton>,
+    textures: Option<Vec<Option<(String, String)>>>,
+    out_path: &str,
+    scale: f64,
+) -> PyResult<()> {
+    if let Some(ref texs) = textures {
+        if submeshes.len() != texs.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("submeshes ({}) and textures ({}) length mismatch",
+                        submeshes.len(), texs.len())
+            ));
+        }
+    }
+    let sm_refs: Vec<&mesh::SubMesh> = submeshes.iter().map(|s| &s.inner).collect();
+    let tex_storage: Option<Vec<Option<mesh::TextureRef<'_>>>> = textures.as_ref().map(|texs| {
+        texs.iter().map(|t| t.as_ref().map(|(rel, abs)| mesh::TextureRef {
+            png_relative_path: rel.as_str(),
+            png_absolute_path: abs.as_str(),
+        })).collect()
+    });
+    let tex_slice = tex_storage.as_deref();
+    let bytes = mesh::submeshes_to_skinned_fbx(&sm_refs, mesh_name, &skeleton.inner, tex_slice, scale);
+    std::fs::write(out_path, &bytes).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("write {}: {}", out_path, e))
+    })
+}
+
 // ---- PABC morph-target ----------------------------------------------------------------------------------------------------------------
 
 #[gen_stub_pyclass]
@@ -1088,6 +1158,8 @@ pub fn cdcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_pac_from_obj, m)?)?;
     m.add_function(wrap_pyfunction!(build_pam_from_fbx, m)?)?;
     m.add_function(wrap_pyfunction!(build_pac_from_fbx, m)?)?;
+    m.add_function(wrap_pyfunction!(export_fbx_textured, m)?)?;
+    m.add_function(wrap_pyfunction!(export_fbx_skinned, m)?)?;
 
     // PABC
     m.add_function(wrap_pyfunction!(parse_pabc, m)?)?;
