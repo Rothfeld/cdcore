@@ -35,7 +35,7 @@ const SUBMESH_TABLE:  usize = 0x410;
 const SUBMESH_STRIDE: usize = 0x218;
 const SUBMESH_TEX_OFF: usize = 0x010;
 const SUBMESH_MAT_OFF: usize = 0x110;
-pub(super) const STRIDE_CANDIDATES: &[usize] = &[
+pub const STRIDE_CANDIDATES: &[usize] = &[
     6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 36, 40, 44, 48, 52, 56, 60, 64,
 ];
 
@@ -453,7 +453,7 @@ pub(super) fn detect_stride(
     None
 }
 
-pub(super) fn find_local_stride(data: &[u8], geom_off: usize, voff: usize, nv: usize, ni: usize) -> Option<(usize, usize)> {
+pub fn find_local_stride(data: &[u8], geom_off: usize, voff: usize, nv: usize, ni: usize) -> Option<(usize, usize)> {
     for &stride in STRIDE_CANDIDATES {
         let vert_start = geom_off + voff * stride;
         let idx_off    = vert_start + nv * stride;

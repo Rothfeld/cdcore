@@ -62,11 +62,24 @@ fn main() {
         return;
     }
 
-    // Log to file so the TUI can own the console.
+    // Log to file so the TUI can own the console. Wrap in a flush-per-record
+    // adapter so log entries land on disk immediately -- env_logger's default
+    // Pipe target uses BufWriter, which means runtime errors (e.g. a failed
+    // FBX import inside the close-spawned flush thread) only appear after
+    // ~8KB of activity or a graceful shutdown that drains the buffer.
+    struct FlushPerWrite(std::fs::File);
+    impl std::io::Write for FlushPerWrite {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let n = self.0.write(buf)?;
+            self.0.flush()?;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> { self.0.flush() }
+    }
     let f = std::fs::File::create("cdwinfs.log")
         .expect("cannot open cdwinfs.log");
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .target(env_logger::Target::Pipe(Box::new(f)))
+        .target(env_logger::Target::Pipe(Box::new(FlushPerWrite(f))))
         .init();
 
     // Resolve game_dir + mount: CLI args -> saved config -> interactive setup.

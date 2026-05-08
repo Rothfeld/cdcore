@@ -16,9 +16,11 @@
 pub mod cfmeta;
 pub mod donor;
 pub mod fbx_import;
+pub mod layout;
 pub mod obj_import;
 pub mod pac_builder;
 pub mod pam_builder;
+pub mod pam_local;
 pub mod pamlod_builder;
 pub mod quant;
 pub mod skeleton_math;

@@ -82,19 +82,59 @@ pub fn build_pam(mesh: &ParsedMesh, original_data: &[u8]) -> BuildResult<Vec<u8>
     let mut working = mesh.clone();
     align_submesh_order_like_original(&original_mesh, &mut working);
 
+    let orig_bmin = read_vec3(original_data, HDR_BBOX_MIN)?;
+    let orig_bmax = read_vec3(original_data, HDR_BBOX_MAX)?;
+
     if pam_needs_full_rebuild(&original_mesh, &working) {
-        return Err(PamBuildError::FullRebuildRequired {
-            reason: "topology, UV, or submesh count changed",
-        });
+        if original_mesh.submeshes.len() != working.submeshes.len() {
+            return Err(PamBuildError::FullRebuildRequired {
+                reason: "submesh count differs from original (rebuild requires same count)",
+            });
+        }
+        // Bbox is the new vertex set only on the full-rebuild path: the
+        // original bbox bytes get replaced wholesale, no reason to union.
+        let new_v: Vec<[f32; 3]> = working
+            .submeshes
+            .iter()
+            .flat_map(|s| s.vertices.iter().copied())
+            .collect();
+        let (bmin, bmax) = if new_v.is_empty() {
+            (orig_bmin, orig_bmax)
+        } else {
+            crate::repack::mesh::quant::compute_bbox(&new_v)
+        };
+        return match crate::repack::mesh::layout::inspect_pam_layout(original_data) {
+            crate::repack::mesh::layout::PamLayout::Local { geom_off, entries, old_geom_end } => {
+                let bytes = crate::repack::mesh::pam_local::serialize_local_layout(
+                    &working,
+                    &original_mesh,
+                    original_data,
+                    geom_off,
+                    &entries,
+                    old_geom_end,
+                    bmin,
+                    bmax,
+                );
+                log::info!(
+                    "Built PAM {} (local-layout rebuild): {} bytes, {} submeshes, {} verts, {} faces",
+                    mesh.path,
+                    bytes.len(),
+                    working.submeshes.len(),
+                    working.submeshes.iter().map(|s| s.vertices.len()).sum::<usize>(),
+                    working.submeshes.iter().map(|s| s.faces.len()).sum::<usize>(),
+                );
+                Ok(bytes)
+            }
+            crate::repack::mesh::layout::PamLayout::Unsupported { reason } => {
+                Err(PamBuildError::FullRebuildRequired { reason })
+            }
+        };
     }
 
     // Empty mesh: leave bytes untouched (matches Python early return).
     if original_mesh.submeshes.is_empty() {
         return Ok(result);
     }
-
-    let orig_bmin = read_vec3(original_data, HDR_BBOX_MIN)?;
-    let orig_bmax = read_vec3(original_data, HDR_BBOX_MAX)?;
 
     // Bbox: union of original + new vertex set so quantization covers both
     // historical and edited extents.

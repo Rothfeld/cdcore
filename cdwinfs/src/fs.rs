@@ -650,6 +650,69 @@ impl SharedFs {
 
     // -- flush to PAZ ----------------------------------------------------------
 
+    /// FBX → mesh write-back: import the FBX bytes, run the right builder
+    /// against the original mesh bytes at `mesh_path`, recurse to flush
+    /// the new mesh, and commit the FBX bytes to `virtual_path` so the
+    /// virtual view returns what the user just saved instead of a fresh
+    /// re-render.  Used by `_prefabs/.../mesh.fbx` and the `.pam.fbx/`
+    /// `.pamlod.fbx/` `.pac.fbx/` virtual roots.
+    fn flush_fbx_to_mesh(&self, virtual_path: &str, mesh_path: &str, fbx_data: Vec<u8>) {
+        // Per-handle temp filename: include the path inode so two concurrent
+        // saves on different meshes don't collide on the same temp file.
+        let tmp = std::env::temp_dir().join(format!(
+            "cdwinfs_save_{}_{}.fbx",
+            std::process::id(),
+            ino_for(virtual_path),
+        ));
+        if let Err(e) = std::fs::write(&tmp, &fbx_data) {
+            warn!("flush fbx {virtual_path}: temp write {tmp:?}: {e}"); return;
+        }
+        let mesh = match cdcore::repack::mesh::import_fbx(&tmp) {
+            Ok(m) => m,
+            Err(e) => {
+                let msg = format!("import_fbx {virtual_path}: {e}");
+                warn!("{msg}");
+                self.push_event(format!("[err] {msg}"));
+                let _ = std::fs::remove_file(&tmp);
+                return;
+            }
+        };
+        let _ = std::fs::remove_file(&tmp);
+
+        let entry = match self.vfs.lookup(mesh_path) {
+            Some(e) => e,
+            None    => { warn!("flush fbx {virtual_path}: target mesh {mesh_path} not in VFS"); return; }
+        };
+        let original = match self.vfs.read_entry(&entry) {
+            Ok(b) => b,
+            Err(e) => { warn!("flush fbx {virtual_path}: read {mesh_path}: {e}"); return; }
+        };
+
+        let lower = mesh_path.to_lowercase();
+        let result = if lower.ends_with(".pac") {
+            cdcore::repack::mesh::build_pac(&mesh, &original)
+        } else if lower.ends_with(".pamlod") {
+            cdcore::repack::mesh::build_pamlod(&mesh, &original)
+        } else if lower.ends_with(".pam") {
+            cdcore::repack::mesh::build_pam(&mesh, &original)
+        } else {
+            warn!("flush fbx {virtual_path}: unsupported mesh extension {mesh_path}");
+            return;
+        };
+        match result {
+            Ok(new_bytes) => {
+                info!("flush fbx {virtual_path}: built {}B for {mesh_path}", new_bytes.len());
+                self.flush_path_sync(mesh_path, new_bytes);
+                self.commit_virtual_path(virtual_path, fbx_data);
+            }
+            Err(e) => {
+                let msg = format!("build_mesh {virtual_path}: {e}");
+                warn!("{msg}");
+                self.push_event(format!("[err] {msg}"));
+            }
+        }
+    }
+
     pub fn flush_path_sync(&self, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(path);
         // Keep `write_mtimes[path]` populated past flush -- without it
@@ -669,54 +732,7 @@ impl SharedFs {
                 Some(p) => p,
                 None    => { warn!("flush mesh.fbx {path}: no resolvable mesh"); return; }
             };
-            let tmp = std::env::temp_dir().join(format!("cdwinfs_save_{}.fbx", std::process::id()));
-            if let Err(e) = std::fs::write(&tmp, &data) {
-                warn!("flush mesh.fbx {path}: temp write {tmp:?}: {e}"); return;
-            }
-            let mesh = match cdcore::repack::mesh::import_fbx(&tmp) {
-                Ok(m) => m,
-                Err(e) => {
-                    let msg = format!("import_fbx {path}: {e}");
-                    warn!("{msg}");
-                    self.push_event(format!("[err] {msg}"));
-                    let _ = std::fs::remove_file(&tmp);
-                    return;
-                }
-            };
-            let _ = std::fs::remove_file(&tmp);
-
-            let entry = match self.vfs.lookup(&mesh_path) {
-                Some(e) => e,
-                None    => { warn!("flush {path}: target mesh {mesh_path} not in VFS"); return; }
-            };
-            let original = match self.vfs.read_entry(&entry) {
-                Ok(b) => b,
-                Err(e) => { warn!("flush {path}: read {mesh_path}: {e}"); return; }
-            };
-
-            let lower = mesh_path.to_lowercase();
-            let result = if lower.ends_with(".pac") {
-                cdcore::repack::mesh::build_pac(&mesh, &original)
-            } else if lower.ends_with(".pamlod") {
-                cdcore::repack::mesh::build_pamlod(&mesh, &original)
-            } else if lower.ends_with(".pam") {
-                cdcore::repack::mesh::build_pam(&mesh, &original)
-            } else {
-                warn!("flush {path}: unsupported mesh extension {mesh_path}");
-                return;
-            };
-            match result {
-                Ok(new_bytes) => {
-                    info!("flush mesh.fbx {path}: built {}B for {mesh_path}", new_bytes.len());
-                    self.flush_path_sync(&mesh_path, new_bytes);
-                    self.commit_virtual_path(path, data);
-                }
-                Err(e) => {
-                    let msg = format!("build_mesh {path}: {e}");
-                    warn!("{msg}");
-                    self.push_event(format!("[err] {msg}"));
-                }
-            }
+            self.flush_fbx_to_mesh(path, &mesh_path, data);
             return;
         }
 
@@ -757,6 +773,12 @@ impl SharedFs {
                             self.push_event(format!("[err] {msg}"));
                         }
                     }
+                }
+                virtual_files::VirtualKind::PamFbx
+                | virtual_files::VirtualKind::PamlodFbx
+                | virtual_files::VirtualKind::PacFbx => {
+                    let source = vf.source_path.clone();
+                    self.flush_fbx_to_mesh(path, &source, data);
                 }
                 _ => warn!("flush {path}: write-back not implemented for this virtual format"),
             }
@@ -1375,6 +1397,16 @@ impl FileSystemContext for CdWinFs {
                     info!("cleanup unlink {path}: refused -- shipped file");
                     return;
                 }
+                // Virtual files (.pam.fbx/, .dds.png/, ...) are read-only
+                // *views* over a real shipped file. The kernel may flag a
+                // pending delete on them as part of a CREATE_ALWAYS overwrite
+                // sequence -- if we drop the overlay here, the writer's
+                // close() finds an empty pending_paths set and never flushes
+                // the user's edit through to the underlying source.
+                if virtual_files::resolve(path).is_some() {
+                    info!("cleanup unlink {path}: refused -- virtual file is read-only");
+                    return;
+                }
                 info!("cleanup unlink {path}: dropping overlay-only entry");
                 self.0.write_overlay.lock().unwrap().remove(path);
                 self.0.write_mtimes.lock().unwrap().remove(path);
@@ -1442,6 +1474,17 @@ impl FileSystemContext for CdWinFs {
         _file_name: &U16CStr,
         delete_file: bool,
     ) -> Result<()> {
+        // Virtual files (.pam.fbx/, .dds.png/, ...) are read-only *views*
+        // over a real shipped file -- they cannot be deleted. Refuse the
+        // request explicitly so the kernel doesn't enter delete-on-close
+        // coordination on the writer's handle, which otherwise holds the
+        // handle open for ~90s after a CREATE_ALWAYS overwrite (cmd copy /Y
+        // and Explorer drag-drop both trigger this) before close() fires
+        // and our flush-to-PAZ thread can run.
+        if delete_file && virtual_files::resolve(&context.path).is_some() {
+            info!("set_delete {:?}: refused -- virtual file is read-only", context.path);
+            return Err(FspError::NTSTATUS(NTSTATUS_ACCESS));
+        }
         info!("set_delete {:?} -> {delete_file}", context.path);
         context.delete_pending.store(delete_file, Ordering::Relaxed);
         Ok(())
@@ -1525,6 +1568,9 @@ impl FileSystemContext for CdWinFs {
             match vf.kind {
                 virtual_files::VirtualKind::PalocJson => {}
                 virtual_files::VirtualKind::DdsPng    => {}
+                virtual_files::VirtualKind::PamFbx    => {}
+                virtual_files::VirtualKind::PamlodFbx => {}
+                virtual_files::VirtualKind::PacFbx    => {}
                 _ => return Err(FspError::NTSTATUS(NTSTATUS_WRITE_PROT)),
             }
         }
