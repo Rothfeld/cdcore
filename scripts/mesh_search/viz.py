@@ -6,11 +6,12 @@ Reads `.corpus/corpus.safetensors`, PCA-reduces the mean-pooled CLIP
 features to 3D, encodes each chosen thumbnail as a PNG data URL on its
 point, and renders them as billboard sprites in a deck.gl OrbitView.
 
-Why we embed deck.gl from a CDN via st.components.v1.html instead of
-using pydeck: streamlit's bundled deck.gl JSON converter only registers
-MapView and a few enums, so OrbitView's controller throws assertion
-failures on every interaction. Going to raw deck.gl gives us the full
-API (OrbitView, COORDINATE_SYSTEM.CARTESIAN, IconLayer auto-packing).
+Why we embed deck.gl from a CDN inside an `st.iframe` (data URL with
+the full HTML) instead of using pydeck: streamlit's bundled deck.gl
+JSON converter only registers MapView and a few enums, so OrbitView's
+controller throws assertion failures on every interaction. Going to
+raw deck.gl gives us the full API (OrbitView,
+COORDINATE_SYSTEM.CARTESIAN, IconLayer auto-packing).
 
 Defaults to a stratified 8000-mesh sample so the JSON payload (~8 MB
 at 32x32 PNGs per point) is reasonable.
@@ -475,15 +476,17 @@ html = (HTML_TEMPLATE
         .replace("__SPRITE_SCALE__", str(sprite_scale * 2))
         .replace("__HEIGHT__", str(VIZ_HEIGHT)))
 
-if query_active:
-    if mode == "image" and img_q_bytes is not None:
-        c1, c2 = st.columns([1, 5])
-        with c1:
-            st.image(img if rm_bg else Image.open(io.BytesIO(img_q_bytes)),
-                     caption="query")
-        with c2:
-            components.html(html, height=VIZ_HEIGHT, scrolling=False)
-    else:
+# NOTE: st.components.v1.html is deprecated (removed after 2026-06-01).
+# Tried st.iframe("data:text/html;base64,...") but the 8000-sprite
+# default payload (~10 MB data URL) doesn't render in browsers; the
+# 500-sprite query payload does. Proper migration is streamlit static-
+# serving, deferred until closer to the deprecation deadline.
+if query_active and mode == "image" and img_q_bytes is not None:
+    c1, c2 = st.columns([1, 5])
+    with c1:
+        st.image(img if rm_bg else Image.open(io.BytesIO(img_q_bytes)),
+                 caption="query")
+    with c2:
         components.html(html, height=VIZ_HEIGHT, scrolling=False)
 else:
     components.html(html, height=VIZ_HEIGHT, scrolling=False)
@@ -508,8 +511,8 @@ if query_active:
                 full = CORPUS_DIR / "thumbnails" / f"{paths[i]}.png"
                 if full.is_file():
                     st.image(disk_thumb_alpha(paths[i], bg_rgb),
-                             use_container_width=True)
+                             width="stretch")
                 else:
                     # Fall back to the in-corpus 32x32 RGBA thumb.
-                    st.image(thumbs[i], use_container_width=True)
+                    st.image(thumbs[i], width="stretch")
                 st.caption(f"`{paths[i]}`  \ncos = {search_scores[int(i)]:.3f}")
