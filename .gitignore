@@ -1,6 +1,7 @@
 _*
+!__init__.py
 .*
 *.png
 !.gitignore
-!/.assets
-!/.github
+!.assets
+!.github

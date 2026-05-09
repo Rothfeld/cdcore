@@ -27,10 +27,10 @@ from safetensors.torch import save_file
 from tqdm import tqdm
 
 import cdcore
-from _lib.mesh_pipeline import (
+from lib.mesh_pipeline import (
     PARSERS, build_submeshes, fibonacci_sphere, mesh_bbox,
 )
-from _lib.raster import MeshRenderer
+from lib.raster import MeshRenderer
 
 MODEL_ID = "openai/clip-vit-base-patch32"
 N_VIEWS = 12

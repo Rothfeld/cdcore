@@ -1,5 +1,7 @@
 # mesh_search -- CLIP-based search over the CD mesh corpus
 
+![viz.py - 3D embedding explorer with CLIP text/image search and filters](.assets/viz.jpg)
+
 Two scripts. Tunables are constants at the top of each file.
 
 ## Install
@@ -88,7 +90,7 @@ crates/scripts/mesh_search/
 ├── build_corpus.py      # corpus builder
 ├── viz.py               # streamlit search + 3D explorer
 ├── requirements.txt
-└── _lib/
+└── lib/
     ├── raster.py        # moderngl rasterizer (EGL + GLSL 330)
     ├── sidecar.py       # .pac_xml / .pami texture resolver
     └── mesh_pipeline.py # build_submeshes + mesh_bbox + fibonacci_sphere
