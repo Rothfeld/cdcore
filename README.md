@@ -191,8 +191,8 @@ and in the cdcore wheel (`THIRD_PARTY_LICENSES.md`).
 ## Runtime requirements
 
 - `cdcore` wheel: Python 3.10+, no other native dependencies
-- `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`), `user_allow_other` in `/etc/fuse.conf`
-- `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed -- the installer registers the DLL path; `cdwinfs.exe` finds it automatically
+- `cdfuse` (Linux): `libfuse3` (`apt install libfuse3`)
+- `cdwinfs` (Windows): [WinFsp 2.x](https://winfsp.dev/rel/) installed
 
 ---
 
