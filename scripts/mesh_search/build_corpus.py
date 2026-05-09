@@ -1,7 +1,7 @@
 """Walk the CD VFS, render each PAM/PAMLOD/PAC in 12 views, CLIP-encode, save.
 
 Usage:
-    python3 crates/scripts/mesh_search/build_corpus.py <game_install_dir>
+    python crates/scripts/mesh_search/build_corpus.py <game_install_dir>
 
     game_install_dir : path to the CD package directory, e.g. /cd
 

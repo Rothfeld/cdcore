@@ -47,8 +47,9 @@ SPRITE = 32
 @st.cache_resource(show_spinner="loading corpus")
 def load_corpus():
     """Returns dict with: mean [N, 512] np, thumbs [N, 32, 32, 4] uint8 np,
-    views [N, 12, 512] torch on `device`, bbox_diag [N] float32 np | None,
-    paths list[str], device str, bg_rgb tuple[int,int,int].
+    views [N, 12, 512] torch on `device`, mean_t [N, 512] torch on `device`,
+    bbox_diag [N] float32 np | None, paths list[str], device str,
+    bg_rgb tuple[int,int,int].
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     with safe_open(str(CORPUS_DIR / "corpus.safetensors"),
@@ -57,12 +58,13 @@ def load_corpus():
         thumbs = f.get_tensor("thumbs").numpy()
         bbox_diag = f.get_tensor("bbox_diag").numpy() if "bbox_diag" in f.keys() else None
         meta   = json.loads(f.metadata()["meta"])
-    # Per-view tensor stays in torch (CLIP scoring uses einsum on it).
+    # Per-view + mean tensors stay in torch on `device` for fast scoring.
     with safe_open(str(CORPUS_DIR / "corpus.safetensors"),
                    framework="pt", device=device) as f:
-        views = f.get_tensor("views")
+        views  = f.get_tensor("views")
+        mean_t = f.get_tensor("mean")
     bg_rgb = tuple(meta.get("bg_rgb", [128, 128, 128]))
-    return dict(mean=mean, thumbs=thumbs, views=views,
+    return dict(mean=mean, mean_t=mean_t, thumbs=thumbs, views=views,
                 bbox_diag=bbox_diag, paths=meta["paths"],
                 device=device, bg_rgb=bg_rgb)
 
@@ -125,21 +127,33 @@ def disk_thumb_alpha(vfs_path: str, bg_rgb: tuple[int, int, int]) -> Image.Image
     return Image.fromarray(np.concatenate([rgb, alpha[..., None]], axis=-1), mode="RGBA")
 
 
-def top_k_indices(views: torch.Tensor, q: torch.Tensor, k: int,
+def top_k_indices(views: torch.Tensor, mean_t: torch.Tensor,
+                  q: torch.Tensor, k: int, mode: str,
                   pool: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """views [N, V, 512], q [512] -> max over V -> top-K (corpus indices, scores).
+    """Top-K corpus indices + scores under either scoring mode.
 
-    If `pool` is given, scoring is restricted to those corpus indices and
-    the returned indices are still in the corpus's own coordinate system
-    (caller doesn't need to re-map).
+    mode == "max":  views [N, V, 512] -> max over V of cos(q, view_v).
+                    Best when query matches a single specific angle.
+    mode == "mean": mean_t [N, 512] -> cos(q, mean[i]).
+                    Tighter category clusters; viewpoint-robust.
+
+    If `pool` is given, scoring is restricted to those corpus indices.
+    Returned indices are in the corpus's own coordinate system.
     """
     q = q.to(views.device)
+    if mode == "max":
+        T = views; sims_fn = lambda t: (t @ q).amax(dim=-1)
+    elif mode == "mean":
+        T = mean_t; sims_fn = lambda t: t @ q
+    else:
+        raise ValueError(f"unknown score mode: {mode}")
+
     if pool is not None and pool.size > 0:
-        idx_t = torch.as_tensor(pool, dtype=torch.long, device=views.device)
-        sims = (views[idx_t] @ q).amax(dim=-1).cpu()        # [|pool|]
+        idx_t = torch.as_tensor(pool, dtype=torch.long, device=T.device)
+        sims = sims_fn(T[idx_t]).cpu()
         vals, local = torch.topk(sims, min(k, sims.shape[0]))
         return pool[local.numpy()], vals.numpy()
-    sims = (views @ q).amax(dim=-1).cpu()                   # [N]
+    sims = sims_fn(T).cpu()
     vals, idxs = torch.topk(sims, min(k, sims.shape[0]))
     return idxs.numpy(), vals.numpy()
 
@@ -375,8 +389,8 @@ if not (CORPUS_DIR / "corpus.safetensors").is_file():
     st.stop()
 
 c = load_corpus()
-mean, thumbs, views_tensor, bbox_diag, paths = (
-    c["mean"], c["thumbs"], c["views"], c["bbox_diag"], c["paths"])
+mean, thumbs, views_tensor, mean_tensor, bbox_diag, paths = (
+    c["mean"], c["thumbs"], c["views"], c["mean_t"], c["bbox_diag"], c["paths"])
 device, bg_rgb = c["device"], c["bg_rgb"]
 N = mean.shape[0]
 cats = all_categories(paths)
@@ -401,6 +415,11 @@ with st.sidebar:
         if f is not None:
             img_q_bytes = f.getvalue()
     top_k = st.slider("top-K", 50, 5000, 500, step=50)
+    score_mode = st.radio(
+        "score mode", ["max", "mean"], horizontal=True,
+        help="max = best of 12 view embeddings (single-angle queries). "
+             "mean = cos vs mean-pooled prototype (viewpoint-robust).",
+    )
 
     st.markdown("---")
     st.markdown("**filter**  (applied when search is off)")
@@ -442,7 +461,8 @@ if query_active:
         if rm_bg:
             img = remove_bg_to_corpus_grey(img, bg_rgb)
         q_vec = encode_image(img, device)
-    pool_idx, pool_scores = top_k_indices(views_tensor, q_vec, top_k, filter_idx)
+    pool_idx, pool_scores = top_k_indices(
+        views_tensor, mean_tensor, q_vec, top_k, score_mode, filter_idx)
     pool = pool_idx.astype(np.int64)
     search_scores = {int(i): float(s) for i, s in zip(pool_idx, pool_scores)}
     st.sidebar.caption(
