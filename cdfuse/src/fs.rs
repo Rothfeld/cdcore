@@ -102,7 +102,6 @@ fn render_synth(
         K::PacFbx             => virtual_files::render_pac_fbx(src_data, src_path),
         K::WemOgg             => virtual_files::render_wem_ogg(src_data, src_path),
         K::PalocJson          => virtual_files::render_paloc(src_data, src_path),
-        // K::BinaryGimmickJsonl => virtual_files::render_binarygimmick(src_data, src_path),
         // PabgbJson needs a sibling .pabgh; the disabled JSONL kinds never
         // reach this dispatch via VIRTUAL_ROOTS. Both paths fall back here.
         K::PabgbJson | K::PrefabJsonl | K::PaaMetabinJsonl | K::NavJsonl => None,
@@ -531,9 +530,6 @@ impl SharedFs {
                     virtual_files::VirtualKind::WemOgg => {
                         virtual_files::render_wem_ogg(&src_data, &vf.source_path)?
                     }
-                    // virtual_files::VirtualKind::BinaryGimmickJsonl => {
-                    //     virtual_files::render_binarygimmick(&src_data, &vf.source_path)?
-                    // }
                 };
                 return Some(Arc::from(bytes));
             }
@@ -1055,29 +1051,6 @@ impl SharedFs {
             K::PamFbx | K::PamlodFbx | K::PacFbx => {
                 self.flush_fbx_to_mesh(virtual_path, source_path, data);
             }
-            // K::BinaryGimmickJsonl => {
-            //     let src_entry = match self.vfs.lookup(source_path) {
-            //         Some(e) => e,
-            //         None    => { warn!("flush {virtual_path}: source {source_path} not in VFS"); return; }
-            //     };
-            //     let original = match self.vfs.read_entry(&src_entry) {
-            //         Ok(d)  => d,
-            //         Err(e) => { warn!("flush {virtual_path}: read source: {e}"); return; }
-            //     };
-            //     match virtual_files::parse_binarygimmick_jsonl(&data, &original) {
-            //         Some(bin) => {
-            //             info!("flush {virtual_path}: JSONL -> {}B binary, repacking {source_path}",
-            //                   bin.len());
-            //             self.flush_path_sync(source_path, bin);
-            //             self.invalidate_virtual_path(virtual_path);
-            //         }
-            //         None => {
-            //             let msg = format!("binarygimmick JSONL parse failed: {virtual_path}");
-            //             warn!("{msg}");
-            //             self.push_event(format!("[err] {msg}"));
-            //         }
-            //     }
-            // }
             K::WemOgg | K::PabgbJson | K::PrefabJsonl | K::PaaMetabinJsonl | K::NavJsonl => {
                 warn!("flush {virtual_path}: write-back not implemented for this virtual format");
             }

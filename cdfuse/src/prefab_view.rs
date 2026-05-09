@@ -68,9 +68,6 @@ impl PrefabIndex {
             .map(|i| list[i].1.clone())
     }
 
-    pub fn invalidate(&self) {
-        *self.stems.write().unwrap() = None;
-    }
 }
 
 /// Strip the directory prefix and `.prefab` extension to recover the stem.
@@ -281,7 +278,7 @@ fn json_str(s: &str) -> String {
 /// so listing the assets/ tree reproduces the game's directory layout.
 pub enum AssetEntry {
     /// Pass-through to `vfs_path` (real bytes after VFS decode).
-    Passthrough { vfs_path: String, relpath: String, kind: AssetKind },
+    Passthrough { vfs_path: String, relpath: String },
     /// Synthetic alias: `<vfs_path><suffix>`, rendered from `vfs_path` via
     /// the matching `virtual_files::render_*` for `kind`.
     Synth { vfs_path: String, relpath: String, kind: VirtualKind },
@@ -316,7 +313,6 @@ pub fn list_asset_entries(vfs: &VfsManager, prefab_vfs_path: &str) -> Vec<AssetE
         out.push(AssetEntry::Passthrough {
             relpath: a.vfs_path.clone(),
             vfs_path: a.vfs_path,
-            kind: a.kind,
         });
     }
     out
