@@ -18,6 +18,8 @@ use cdcore::formats::animation::pab::parse as parse_pab;
 use cdcore::formats::scene::{parse_prefab, PrefabStringKind};
 use cdcore::VfsManager;
 
+use crate::virtual_files::{self, VirtualKind};
+
 pub const PREFAB_ROOT_NAME: &str = "_prefabs";
 pub const ASSETS_DIR_NAME: &str  = "assets";
 pub const MANIFEST_NAME:   &str  = "manifest.json";
@@ -270,37 +272,46 @@ fn json_str(s: &str) -> String {
 }
 
 /// What the assets/ dir actually exposes for one referenced asset.
-/// `.dds` files get a sibling `.dds.png` synth so Blender / image viewers
-/// can open them directly without going through cdcore from the host side.
+/// Source files whose extension has a virtual mapping (`.dds` -> `.dds.png`,
+/// `.pam`/`.pamlod`/`.pac` -> `.fbx`, `.wem` -> `.ogg`, `.paloc` -> `.jsonl`)
+/// get a sibling synth alongside the raw passthrough so file managers and
+/// content tools can open them directly.
 ///
 /// `relpath` mirrors the original VFS path verbatim (subdirectories preserved),
 /// so listing the assets/ tree reproduces the game's directory layout.
 pub enum AssetEntry {
     /// Pass-through to `vfs_path` (real bytes after VFS decode).
     Passthrough { vfs_path: String, relpath: String, kind: AssetKind },
-    /// Synthetic PNG: `<vfs_path>.png`, decoded from `vfs_path` (the .dds).
-    DdsPng { vfs_path: String, relpath: String },
+    /// Synthetic alias: `<vfs_path><suffix>`, rendered from `vfs_path` via
+    /// the matching `virtual_files::render_*` for `kind`.
+    Synth { vfs_path: String, relpath: String, kind: VirtualKind },
 }
 
 impl AssetEntry {
     pub fn relpath(&self) -> &str {
         match self {
-            AssetEntry::Passthrough { relpath, .. } | AssetEntry::DdsPng { relpath, .. } => relpath,
+            AssetEntry::Passthrough { relpath, .. } | AssetEntry::Synth { relpath, .. } => relpath,
         }
     }
 }
 
 /// Expand the bundle's asset list into the actual file paths inside
-/// `_prefabs/<stem>/assets/`. Each `.dds` produces TWO entries: the raw
-/// passthrough at `<vfs_path>` and a `.dds.png` synth at `<vfs_path>.png`.
+/// `_prefabs/<stem>/assets/`. Each source file produces a passthrough; if its
+/// extension has a virtual mapping (DDS/PAM/PAMLOD/PAC/WEM/PALOC) it also
+/// produces a sibling synth at `<vfs_path><suffix>`.
 pub fn list_asset_entries(vfs: &VfsManager, prefab_vfs_path: &str) -> Vec<AssetEntry> {
     let mut out: Vec<AssetEntry> = Vec::new();
     for a in resolve_assets(vfs, prefab_vfs_path) {
-        if matches!(a.kind, AssetKind::Texture) {
-            out.push(AssetEntry::DdsPng {
-                vfs_path: a.vfs_path.clone(),
-                relpath: format!("{}.png", a.vfs_path),
-            });
+        // Only emit a synth alias when the source actually resolves -- a
+        // sibling entry that EIOs on read just confuses file managers.
+        if vfs.lookup(&a.vfs_path).is_some() {
+            if let Some((kind, suffix)) = virtual_files::synth_for_source(&a.vfs_path) {
+                out.push(AssetEntry::Synth {
+                    vfs_path: a.vfs_path.clone(),
+                    relpath: format!("{}{suffix}", a.vfs_path),
+                    kind,
+                });
+            }
         }
         out.push(AssetEntry::Passthrough {
             relpath: a.vfs_path.clone(),
@@ -311,21 +322,32 @@ pub fn list_asset_entries(vfs: &VfsManager, prefab_vfs_path: &str) -> Vec<AssetE
     out
 }
 
-/// Resolve a path-relative-to-`assets/` to its underlying VFS source. Returns
-/// None if no asset in the bundle matches. Handles the `.dds.png` synth alias.
+/// Resolve a path-relative-to-`assets/` to its underlying VFS source plus the
+/// `VirtualKind` that should render it (`None` for raw passthroughs).
+/// Returns `None` outright if no asset matches.
+pub fn resolve_asset_relpath(
+    vfs: &VfsManager,
+    prefab_vfs_path: &str,
+    relpath: &str,
+) -> Option<(String, Option<VirtualKind>)> {
+    for entry in list_asset_entries(vfs, prefab_vfs_path) {
+        if entry.relpath() == relpath {
+            return Some(match entry {
+                AssetEntry::Passthrough { vfs_path, .. } => (vfs_path, None),
+                AssetEntry::Synth { vfs_path, kind, .. } => (vfs_path, Some(kind)),
+            });
+        }
+    }
+    None
+}
+
+/// Convenience: just the VFS source path for `relpath`.
 pub fn vfs_path_for_asset(
     vfs: &VfsManager,
     prefab_vfs_path: &str,
     relpath: &str,
 ) -> Option<String> {
-    for entry in list_asset_entries(vfs, prefab_vfs_path) {
-        if entry.relpath() == relpath {
-            return Some(match entry {
-                AssetEntry::Passthrough { vfs_path, .. } | AssetEntry::DdsPng { vfs_path, .. } => vfs_path,
-            });
-        }
-    }
-    None
+    resolve_asset_relpath(vfs, prefab_vfs_path, relpath).map(|(p, _)| p)
 }
 
 /// One directory entry (file or subdir) at a given level inside the assets
@@ -333,7 +355,9 @@ pub fn vfs_path_for_asset(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetsTreeChild {
     /// A real asset entry whose relpath has no further slashes after `prefix`.
-    File { relpath: String, name: String, is_dds_png: bool },
+    /// `synth_kind` is `Some` for virtual-format aliases (rendered via
+    /// `virtual_files::render_*`), `None` for raw passthroughs.
+    File { relpath: String, name: String, synth_kind: Option<VirtualKind> },
     /// An intermediate subdirectory that contains at least one asset.
     Dir { name: String },
 }
@@ -349,7 +373,10 @@ pub fn assets_dir_children(
 ) -> Vec<AssetsTreeChild> {
     let entries = list_asset_entries(vfs, prefab_vfs_path);
     children_at_prefix(
-        entries.iter().map(|e| (e.relpath(), matches!(e, AssetEntry::DdsPng { .. }))),
+        entries.iter().map(|e| (e.relpath(), match e {
+            AssetEntry::Synth { kind, .. } => Some(*kind),
+            AssetEntry::Passthrough { .. } => None,
+        })),
         prefix,
     )
 }
@@ -373,7 +400,7 @@ pub fn fbm_dir_children(
 ) -> Vec<AssetsTreeChild> {
     let textures = texture_paths(vfs, prefab_vfs_path);
     let pngs: Vec<String> = textures.iter().map(|p| png_path_for_dds(p)).collect();
-    children_at_prefix(pngs.iter().map(|p| (p.as_str(), true)), prefix)
+    children_at_prefix(pngs.iter().map(|p| (p.as_str(), Some(VirtualKind::DdsPng))), prefix)
 }
 
 /// Whether `relpath` is a known intermediate subdirectory inside `mesh.fbm/`.
@@ -385,11 +412,11 @@ pub fn is_fbm_subdir(vfs: &VfsManager, prefab_vfs_path: &str, relpath: &str) -> 
 }
 
 /// Compute the unique direct children at a given prefix from an iterator of
-/// (relpath, is_synthetic_png) tuples. Files at the prefix surface as `File`;
+/// (relpath, synth_kind) tuples. Files at the prefix surface as `File`;
 /// any longer relpath surfaces its first remaining segment as a `Dir`.
 fn children_at_prefix<'a, I>(entries: I, prefix: &str) -> Vec<AssetsTreeChild>
 where
-    I: IntoIterator<Item = (&'a str, bool)>,
+    I: IntoIterator<Item = (&'a str, Option<VirtualKind>)>,
 {
     let normalized_prefix = if prefix.is_empty() {
         String::new()
@@ -401,7 +428,7 @@ where
 
     let mut files: Vec<AssetsTreeChild> = Vec::new();
     let mut dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for (rel, is_dds_png) in entries {
+    for (rel, synth_kind) in entries {
         let tail = match rel.strip_prefix(&normalized_prefix) {
             Some(t) if !t.is_empty() => t,
             _ => continue,
@@ -412,7 +439,7 @@ where
             files.push(AssetsTreeChild::File {
                 relpath: rel.to_string(),
                 name: tail.to_string(),
-                is_dds_png,
+                synth_kind,
             });
         }
     }
@@ -598,22 +625,6 @@ pub fn synth_mesh_fbx(vfs: &VfsManager, prefab_vfs_path: &str) -> Option<Vec<u8>
     Some(submeshes_to_textured_fbx(&sm_refs, &stem, &tex_refs))
 }
 
-/// Returns true when `relpath` is a synthetic `.dds.png` alias rather than
-/// a real-byte passthrough -- the read path needs to know whether to
-/// dds-decode + png-encode or pass through raw bytes.
-pub fn is_dds_png_relpath(
-    vfs: &VfsManager,
-    prefab_vfs_path: &str,
-    relpath: &str,
-) -> bool {
-    list_asset_entries(vfs, prefab_vfs_path).into_iter().any(|e| {
-        if let AssetEntry::DdsPng { relpath: r, .. } = e {
-            r == relpath
-        } else {
-            false
-        }
-    })
-}
 
 #[cfg(test)]
 mod tests {
@@ -658,11 +669,11 @@ mod tests {
     #[test]
     fn children_at_prefix_groups_subdirs() {
         let entries = vec![
-            ("character/cha/foo.pac", false),
-            ("character/cha/bar.dds", false),
-            ("character/cha/bar.dds.png", true),
-            ("character/skel.pab", false),
-            ("misc/x.wem", false),
+            ("character/cha/foo.pac", None),
+            ("character/cha/bar.dds", None),
+            ("character/cha/bar.dds.png", Some(VirtualKind::DdsPng)),
+            ("character/skel.pab", None),
+            ("misc/x.wem", None),
         ];
         // Root prefix: two subdirs, no direct files.
         let root = children_at_prefix(entries.iter().copied(), "");

@@ -1,0 +1,31 @@
+# mesh_search runtime deps. cdcore is in-tree -- not pip.
+
+# CLIP image/text encoder + tensor math
+torch              # GPU CLIP forward, einsum scoring, tensor IO
+transformers       # CLIPModel + CLIPProcessor (openai/clip-vit-base-patch32)
+
+# corpus on-disk format
+safetensors        # corpus.safetensors read/write
+
+# offscreen GPU rasterizer (raster.py)
+moderngl           # EGL standalone GL context, GLSL 330 shaders
+
+# numerics + image IO
+numpy              # vertex/uv arrays, fibonacci sphere, bbox math
+Pillow             # PNG IO, RGB <-> RGBA, alpha composite
+
+# query UI
+streamlit          # query.py
+
+# build_corpus.py progress
+tqdm               # progress bar over the mesh corpus
+
+# viz.py -- 3D embeddings viewer (thumbnails-as-points)
+# deck.gl is loaded from a CDN inside an HTML iframe (st.components.v1.html)
+# because streamlit's bundled pydeck JSON converter doesn't expose
+# OrbitView. Only PCA is needed Python-side.
+scikit-learn       # PCA reduction
+
+# image-tab bg removal (downloads ~/.u2net/u2net.onnx on first call)
+rembg              # U2Net cutout
+onnxruntime        # rembg's ONNX backend

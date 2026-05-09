@@ -36,12 +36,13 @@ use cdcore::formats::mesh::{parse_pam, parse_pamlod, parse_pac, submeshes_to_fbx
 /// ".png" for .dds.png/ so bitmap_bell.dds -> bitmap_bell.dds.png and
 /// file managers pick the right MIME type without ambiguity.
 static VIRTUAL_ROOTS: &[(&str, &str, &str)] = &[
-    (".paloc.jsonl",       ".paloc",       ".jsonl"),
+    (".paloc.jsonl",          ".paloc",          ".jsonl"),
     // (".pabgb.jsonl",       ".pabgb",       ".jsonl"),     // disabled
     // (".prefab.jsonl",      ".prefab",      ".jsonl"),     // disabled
     // (".paa_metabin.jsonl", ".paa_metabin", ".jsonl"),     // disabled
     // (".nav.jsonl",         ".nav",         ".jsonl"),     // disabled
-    (".dds.png",           ".dds",         ".png"),
+    (".binarygimmick.jsonl",  ".binarygimmick",  ".jsonl"),
+    (".dds.png",              ".dds",            ".png"),
     (".pam.fbx",           ".pam",         ".fbx"),
     (".pamlod.fbx",        ".pamlod",      ".fbx"),
     (".pac.fbx",           ".pac",         ".fbx"),
@@ -50,13 +51,14 @@ static VIRTUAL_ROOTS: &[(&str, &str, &str)] = &[
 
 // -- Public types --------------------------------------------------------------
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VirtualKind {
     PalocJson,
     PabgbJson,
     PrefabJsonl,
     PaaMetabinJsonl,
     NavJsonl,
+    BinaryGimmickJsonl,
     DdsPng,
     PamFbx,
     PamlodFbx,
@@ -143,18 +145,33 @@ pub fn resolve_virtual_dir(path: &str) -> Option<VirtualDirInfo> {
     None
 }
 
+/// For a real source file path, return `(VirtualKind, suffix)` if its extension
+/// matches an enabled virtual root. Used by callers that expose a real file
+/// under both its raw name and a virtual-format alias in the same directory
+/// (e.g. prefab `assets/`: `bar.dds` plus sibling `bar.dds.png`).
+pub fn synth_for_source(source_path: &str) -> Option<(VirtualKind, &'static str)> {
+    let lower = source_path.to_lowercase();
+    for &(_, src_ext, suffix) in VIRTUAL_ROOTS {
+        if lower.ends_with(src_ext) {
+            return Some((kind_for(src_ext), suffix));
+        }
+    }
+    None
+}
+
 fn kind_for(ext: &str) -> VirtualKind {
     match ext {
-        ".paloc"       => VirtualKind::PalocJson,
-        ".pabgb"       => VirtualKind::PabgbJson,
-        ".prefab"      => VirtualKind::PrefabJsonl,
-        ".paa_metabin" => VirtualKind::PaaMetabinJsonl,
-        ".nav"         => VirtualKind::NavJsonl,
-        ".dds"         => VirtualKind::DdsPng,
-        ".pam"         => VirtualKind::PamFbx,
-        ".pamlod"      => VirtualKind::PamlodFbx,
-        ".pac"         => VirtualKind::PacFbx,
-        ".wem"         => VirtualKind::WemOgg,
+        ".paloc"          => VirtualKind::PalocJson,
+        ".pabgb"          => VirtualKind::PabgbJson,
+        ".prefab"         => VirtualKind::PrefabJsonl,
+        ".paa_metabin"    => VirtualKind::PaaMetabinJsonl,
+        ".nav"            => VirtualKind::NavJsonl,
+        ".binarygimmick"  => VirtualKind::BinaryGimmickJsonl,
+        ".dds"            => VirtualKind::DdsPng,
+        ".pam"            => VirtualKind::PamFbx,
+        ".pamlod"         => VirtualKind::PamlodFbx,
+        ".pac"            => VirtualKind::PacFbx,
+        ".wem"            => VirtualKind::WemOgg,
         _              => unreachable!("unknown virtual ext: {ext}"),
     }
 }
@@ -173,6 +190,13 @@ pub fn render_paloc(data: &[u8], path: &str) -> Option<Vec<u8>> {
         out.push_str("}\n");
     }
     Some(out.into_bytes())
+}
+
+/// Decode a .binarygimmick file's records region and return JSONL bytes.
+pub fn render_binarygimmick(data: &[u8], path: &str) -> Option<Vec<u8>> {
+    let parsed = cdcore::formats::data::parse_binarygimmick(data)
+        .map_err(|e| warn!("render_binarygimmick {path}: {e}")).ok()?;
+    Some(cdcore::formats::data::binarygimmick::to_jsonl(&parsed))
 }
 
 /// Decode a PABGB binary pair and return UTF-8 JSON bytes.
@@ -387,6 +411,52 @@ pub fn render_wem_ogg(data: &[u8], path: &str) -> Option<Vec<u8>> {
 }
 
 // -- Write-back: JSONL -> binary -----------------------------------------------
+
+/// Parse `.binarygimmick.jsonl` (one `{"key":...,"value":...}` per line) and
+/// splice the records into the original `.binarygimmick` bytes, preserving
+/// the header + trailing-binary regions.
+///
+/// Safety gate: the trailing region holds a bindings table that references
+/// records by index (and possibly by other identifiers we have not yet
+/// reverse-engineered). Adding, removing or reordering records would
+/// silently break those references. We therefore reject any save that
+/// changes the key set or the key order; only value strings can change.
+pub fn parse_binarygimmick_jsonl(data: &[u8], original: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(data)
+        .map_err(|e| warn!("parse_binarygimmick_jsonl: invalid UTF-8: {e}")).ok()?;
+    let mut records = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let key   = extract_json_field(line, "\"key\"")
+            .unwrap_or_else(|| { warn!("parse_binarygimmick_jsonl: missing key in: {line}"); String::new() });
+        let value = extract_json_field(line, "\"value\"")
+            .unwrap_or_else(|| { warn!("parse_binarygimmick_jsonl: missing value in: {line}"); String::new() });
+        records.push(cdcore::formats::data::GimmickRecord { key, value });
+    }
+
+    // Reject structural edits: must match the original key sequence exactly.
+    let parsed = cdcore::formats::data::parse_binarygimmick(original)
+        .map_err(|e| warn!("parse_binarygimmick_jsonl: re-parse original: {e}")).ok()?;
+    if records.len() != parsed.records.len() {
+        warn!("parse_binarygimmick_jsonl: rejecting save -- record count changed \
+               ({} -> {}). Add/remove of records is unsupported because the \
+               trailing bindings table references records by index.",
+              parsed.records.len(), records.len());
+        return None;
+    }
+    for (i, (n, o)) in records.iter().zip(parsed.records.iter()).enumerate() {
+        if n.key != o.key {
+            warn!("parse_binarygimmick_jsonl: rejecting save -- key at index {i} \
+                   changed ({:?} -> {:?}). Reorder/rename of keys is unsupported.",
+                  o.key, n.key);
+            return None;
+        }
+    }
+
+    cdcore::formats::data::serialize_binarygimmick(original, &records)
+        .map_err(|e| warn!("parse_binarygimmick_jsonl: serialize: {e}")).ok()
+}
 
 /// Parse PALOC JSONL (one `{"key":...,"value":...}` per line) back to binary.
 pub fn parse_paloc_jsonl(data: &[u8]) -> Option<Vec<u8>> {

@@ -84,6 +84,31 @@ fn ogg_magic_stub() -> &'static [u8] {
     b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"
 }
 
+// -- Virtual-format dispatch --------------------------------------------------
+
+/// Render a virtual-format synth from its source bytes. Mirrors the dispatch
+/// in `decode()` for direct `virtual_files::resolve` paths so the prefab
+/// assets/ tree reuses the same renderers.
+fn render_synth(
+    kind: virtual_files::VirtualKind,
+    src_data: &[u8],
+    src_path: &str,
+) -> Option<Vec<u8>> {
+    use virtual_files::VirtualKind as K;
+    match kind {
+        K::DdsPng             => virtual_files::render_dds_png(src_data, src_path),
+        K::PamFbx             => virtual_files::render_pam_fbx(src_data, src_path),
+        K::PamlodFbx          => virtual_files::render_pamlod_fbx(src_data, src_path),
+        K::PacFbx             => virtual_files::render_pac_fbx(src_data, src_path),
+        K::WemOgg             => virtual_files::render_wem_ogg(src_data, src_path),
+        K::PalocJson          => virtual_files::render_paloc(src_data, src_path),
+        K::BinaryGimmickJsonl => virtual_files::render_binarygimmick(src_data, src_path),
+        // PabgbJson needs a sibling .pabgh; the disabled JSONL kinds never
+        // reach this dispatch via VIRTUAL_ROOTS. Both paths fall back here.
+        K::PabgbJson | K::PrefabJsonl | K::PaaMetabinJsonl | K::NavJsonl => None,
+    }
+}
+
 // -- PNG header builder -------------------------------------------------------
 
 fn build_png_header(width: u32, height: u32) -> Vec<u8> {
@@ -440,16 +465,17 @@ impl SharedFs {
                         // Could resolve to a file or to an intermediate dir;
                         // only files have decoded bytes. Dirs return None here
                         // (callers don't read directories via decode()).
-                        let asset_path = pv::vfs_path_for_asset(&self.vfs, &full, relpath)?;
-                        // Synth `.dds.png`: decode the source DDS then PNG-encode.
-                        if pv::is_dds_png_relpath(&self.vfs, &full, relpath) {
-                            let src_ino  = ino_for(&asset_path);
-                            let src_data = self.decode(src_ino, &asset_path)?;
-                            let png      = virtual_files::render_dds_png(&src_data, &asset_path)?;
-                            return Some(Arc::from(png));
-                        }
+                        let (asset_path, synth_kind) =
+                            pv::resolve_asset_relpath(&self.vfs, &full, relpath)?;
                         let src_ino = ino_for(&asset_path);
-                        return self.decode(src_ino, &asset_path);
+                        match synth_kind {
+                            None => return self.decode(src_ino, &asset_path),
+                            Some(kind) => {
+                                let src_data = self.decode(src_ino, &asset_path)?;
+                                let bytes = render_synth(kind, &src_data, &asset_path)?;
+                                return Some(Arc::from(bytes));
+                            }
+                        }
                     }
                     PrefabPath::MeshFbx { stem } => {
                         let full = self.prefab_index.full_path_of(&self.vfs, stem)?;
@@ -505,6 +531,9 @@ impl SharedFs {
                     virtual_files::VirtualKind::WemOgg => {
                         virtual_files::render_wem_ogg(&src_data, &vf.source_path)?
                     }
+                    // virtual_files::VirtualKind::BinaryGimmickJsonl => {
+                    //     virtual_files::render_binarygimmick(&src_data, &vf.source_path)?
+                    // }
                 };
                 return Some(Arc::from(bytes));
             }
@@ -848,10 +877,12 @@ impl SharedFs {
                         name: name.clone(), attr_ttl: TTL,
                     });
                 }
-                pv::AssetsTreeChild::File { relpath, name, is_dds_png } => {
+                pv::AssetsTreeChild::File { relpath, name, synth_kind } => {
                     let cp = format!("{dir_base}/{name}");
                     let cino = ino_for(&cp);
-                    let size = if *is_dds_png {
+                    // Synth aliases report 0 (true size only known after render).
+                    // Passthroughs borrow the real VFS entry's orig_size.
+                    let size = if synth_kind.is_some() {
                         0
                     } else if let Some(vfs) = size_lookup_vfs {
                         vfs.lookup(relpath).map(|e| e.orig_size as u64).unwrap_or(0)
@@ -972,6 +1003,148 @@ impl SharedFs {
         self.decode_cache.lock().unwrap().pop(&ino_for(virtual_path));
     }
 
+    /// Write-back: take saved bytes from a virtual synth path, parse them back
+    /// to the source format, recurse-flush the source, then drop the overlay.
+    /// Mirrors the dispatch in `render_synth` so direct `virtual_files`
+    /// roots and prefab `assets/` siblings share one writeback path.
+    fn flush_synth_to_source(
+        &self,
+        kind: virtual_files::VirtualKind,
+        virtual_path: &str,
+        source_path: &str,
+        data: Vec<u8>,
+    ) {
+        use virtual_files::VirtualKind as K;
+        match kind {
+            K::PalocJson => match virtual_files::parse_paloc_jsonl(&data) {
+                Some(binary) => {
+                    info!("flush {virtual_path}: paloc JSONL -> {}B, repacking {source_path}",
+                          binary.len());
+                    self.flush_path_sync(source_path, binary);
+                    self.invalidate_virtual_path(virtual_path);
+                }
+                None => {
+                    let msg = format!("paloc parse failed: {virtual_path}");
+                    warn!("{msg}");
+                    self.push_event(format!("[err] {msg}"));
+                }
+            },
+            K::DdsPng => {
+                let src_entry = match self.vfs.lookup(source_path) {
+                    Some(e) => e,
+                    None    => { warn!("flush {virtual_path}: source {source_path} not in VFS"); return; }
+                };
+                let orig_dds = match self.vfs.read_entry(&src_entry) {
+                    Ok(d)  => d,
+                    Err(e) => { warn!("flush {virtual_path}: read source DDS: {e}"); return; }
+                };
+                match virtual_files::parse_png_to_dds(&data, &orig_dds, source_path) {
+                    Some(dds) => {
+                        info!("flush {virtual_path}: PNG -> {}B DDS, repacking {source_path}",
+                              dds.len());
+                        self.flush_path_sync(source_path, dds);
+                        self.invalidate_virtual_path(virtual_path);
+                    }
+                    None => {
+                        let msg = format!("PNG->DDS failed: {virtual_path}");
+                        warn!("{msg}");
+                        self.push_event(format!("[err] {msg}"));
+                    }
+                }
+            }
+            K::PamFbx | K::PamlodFbx | K::PacFbx => {
+                self.flush_fbx_to_mesh(virtual_path, source_path, data);
+            }
+            K::BinaryGimmickJsonl => {
+                let src_entry = match self.vfs.lookup(source_path) {
+                    Some(e) => e,
+                    None    => { warn!("flush {virtual_path}: source {source_path} not in VFS"); return; }
+                };
+                let original = match self.vfs.read_entry(&src_entry) {
+                    Ok(d)  => d,
+                    Err(e) => { warn!("flush {virtual_path}: read source: {e}"); return; }
+                };
+                match virtual_files::parse_binarygimmick_jsonl(&data, &original) {
+                    Some(bin) => {
+                        info!("flush {virtual_path}: JSONL -> {}B binary, repacking {source_path}",
+                              bin.len());
+                        self.flush_path_sync(source_path, bin);
+                        self.invalidate_virtual_path(virtual_path);
+                    }
+                    None => {
+                        let msg = format!("binarygimmick JSONL parse failed: {virtual_path}");
+                        warn!("{msg}");
+                        self.push_event(format!("[err] {msg}"));
+                    }
+                }
+            }
+            K::WemOgg | K::PabgbJson | K::PrefabJsonl | K::PaaMetabinJsonl | K::NavJsonl => {
+                warn!("flush {virtual_path}: write-back not implemented for this virtual format");
+            }
+        }
+    }
+
+    /// FBX -> mesh write-back: import the FBX bytes, run the right builder
+    /// against the original mesh bytes at `mesh_path`, recurse to flush
+    /// the new mesh.  Used by `_prefabs/.../mesh.fbx` and the `.pam.fbx/`
+    /// `.pamlod.fbx/` `.pac.fbx/` virtual roots.
+    fn flush_fbx_to_mesh(&self, virtual_path: &str, mesh_path: &str, fbx_data: Vec<u8>) {
+        // Per-handle temp filename: include the path inode so concurrent saves
+        // on different meshes don't collide on the same temp file.
+        let tmp = std::env::temp_dir().join(format!(
+            "cdfuse_save_{}_{}.fbx",
+            std::process::id(),
+            ino_for(virtual_path),
+        ));
+        if let Err(e) = std::fs::write(&tmp, &fbx_data) {
+            warn!("flush fbx {virtual_path}: temp write {tmp:?}: {e}"); return;
+        }
+        let mesh = match cdcore::repack::mesh::import_fbx(&tmp) {
+            Ok(m) => m,
+            Err(e) => {
+                let msg = format!("import_fbx {virtual_path}: {e}");
+                warn!("{msg}");
+                self.push_event(format!("[err] {msg}"));
+                let _ = std::fs::remove_file(&tmp);
+                return;
+            }
+        };
+        let _ = std::fs::remove_file(&tmp);
+
+        let entry = match self.vfs.lookup(mesh_path) {
+            Some(e) => e,
+            None    => { warn!("flush fbx {virtual_path}: target mesh {mesh_path} not in VFS"); return; }
+        };
+        let original = match self.vfs.read_entry(&entry) {
+            Ok(b) => b,
+            Err(e) => { warn!("flush fbx {virtual_path}: read {mesh_path}: {e}"); return; }
+        };
+
+        let lower = mesh_path.to_lowercase();
+        let result = if lower.ends_with(".pac") {
+            cdcore::repack::mesh::build_pac(&mesh, &original)
+        } else if lower.ends_with(".pamlod") {
+            cdcore::repack::mesh::build_pamlod(&mesh, &original)
+        } else if lower.ends_with(".pam") {
+            cdcore::repack::mesh::build_pam(&mesh, &original)
+        } else {
+            warn!("flush fbx {virtual_path}: unsupported mesh extension {mesh_path}");
+            return;
+        };
+        match result {
+            Ok(new_bytes) => {
+                info!("flush fbx {virtual_path}: built {}B for {mesh_path}", new_bytes.len());
+                self.flush_path_sync(mesh_path, new_bytes);
+                self.invalidate_virtual_path(virtual_path);
+            }
+            Err(e) => {
+                let msg = format!("build_mesh {virtual_path}: {e}");
+                warn!("{msg}");
+                self.push_event(format!("[err] {msg}"));
+            }
+        }
+    }
+
     fn flush_path_sync(&self, path: &str, data: Vec<u8>) {
         self.pending_paths.lock().unwrap().remove(path);
         // Keep `write_mtimes[path]` populated past flush -- without it
@@ -979,112 +1152,57 @@ impl SharedFs {
         // (keyed on mtime) never invalidate between saves.
         self.write_mtimes.lock().unwrap().insert(path.to_string(), SystemTime::now());
 
-        // Prefab-view synth `mesh.fbx`: write FBX bytes to a temp file, import
-        // back into a ParsedMesh, build new mesh bytes via the appropriate
-        // builder for the underlying format, then recurse to flush the real path.
-        if let Some(crate::prefab_view::PrefabPath::MeshFbx { stem }) = crate::prefab_view::classify(path) {
-            let full = match self.prefab_index.full_path_of(&self.vfs, stem) {
-                Some(s) => s,
-                None    => { warn!("flush mesh.fbx {path}: prefab stem not found"); return; }
-            };
-            let mesh_path = match crate::prefab_view::primary_mesh_path(&self.vfs, &full) {
-                Some(p) => p,
-                None    => { warn!("flush mesh.fbx {path}: no resolvable mesh"); return; }
-            };
-            let tmp = std::env::temp_dir().join(format!("cdfuse_save_{}.fbx", std::process::id()));
-            if let Err(e) = std::fs::write(&tmp, &data) {
-                warn!("flush mesh.fbx {path}: temp write {tmp:?}: {e}"); return;
-            }
-            let mesh = match cdcore::repack::mesh::import_fbx(&tmp) {
-                Ok(m) => m,
-                Err(e) => {
-                    let msg = format!("import_fbx {path}: {e}");
-                    warn!("{msg}");
-                    self.push_event(format!("[err] {msg}"));
-                    let _ = std::fs::remove_file(&tmp);
+        if let Some(pp) = crate::prefab_view::classify(path) {
+            use crate::prefab_view::{self as pv, PrefabPath};
+            match pp {
+                PrefabPath::MeshFbx { stem } => {
+                    let full = match self.prefab_index.full_path_of(&self.vfs, stem) {
+                        Some(s) => s,
+                        None    => { warn!("flush mesh.fbx {path}: prefab stem not found"); return; }
+                    };
+                    let mesh_path = match pv::primary_mesh_path(&self.vfs, &full) {
+                        Some(p) => p,
+                        None    => { warn!("flush mesh.fbx {path}: no resolvable mesh"); return; }
+                    };
+                    self.flush_fbx_to_mesh(path, &mesh_path, data);
                     return;
                 }
-            };
-            let _ = std::fs::remove_file(&tmp);
-
-            // Read original bytes from VFS to feed the builders.
-            let entry = match self.vfs.lookup(&mesh_path) {
-                Some(e) => e,
-                None    => { warn!("flush {path}: target mesh {mesh_path} not in VFS"); return; }
-            };
-            let original = match self.vfs.read_entry(&entry) {
-                Ok(b) => b,
-                Err(e) => { warn!("flush {path}: read {mesh_path}: {e}"); return; }
-            };
-
-            let lower = mesh_path.to_lowercase();
-            let result = if lower.ends_with(".pac") {
-                cdcore::repack::mesh::build_pac(&mesh, &original)
-            } else if lower.ends_with(".pamlod") {
-                cdcore::repack::mesh::build_pamlod(&mesh, &original)
-            } else if lower.ends_with(".pam") {
-                cdcore::repack::mesh::build_pam(&mesh, &original)
-            } else {
-                warn!("flush {path}: unsupported mesh extension {mesh_path}");
-                return;
-            };
-            match result {
-                Ok(new_bytes) => {
-                    info!("flush mesh.fbx {path}: built {}B for {mesh_path}", new_bytes.len());
-                    self.flush_path_sync(&mesh_path, new_bytes);
-                    self.invalidate_virtual_path(path);
+                PrefabPath::AssetsEntry { stem, relpath } => {
+                    let full = match self.prefab_index.full_path_of(&self.vfs, stem) {
+                        Some(s) => s,
+                        None    => { warn!("flush {path}: prefab stem not found"); return; }
+                    };
+                    let (asset_path, synth_kind) =
+                        match pv::resolve_asset_relpath(&self.vfs, &full, relpath) {
+                            Some(t) => t,
+                            None    => { warn!("flush {path}: relpath does not match any asset"); return; }
+                        };
+                    match synth_kind {
+                        Some(kind) => self.flush_synth_to_source(kind, path, &asset_path, data),
+                        None       => self.flush_path_sync(&asset_path, data),
+                    }
+                    return;
                 }
-                Err(e) => {
-                    let msg = format!("build_mesh {path}: {e}");
-                    warn!("{msg}");
-                    self.push_event(format!("[err] {msg}"));
+                PrefabPath::FbmEntry { stem, relpath } => {
+                    let full = match self.prefab_index.full_path_of(&self.vfs, stem) {
+                        Some(s) => s,
+                        None    => { warn!("flush {path}: prefab stem not found"); return; }
+                    };
+                    let dds_path = match pv::dds_path_for_fbm_png(&self.vfs, &full, relpath) {
+                        Some(p) => p,
+                        None    => { warn!("flush {path}: no DDS matches mesh.fbm relpath"); return; }
+                    };
+                    self.flush_synth_to_source(
+                        virtual_files::VirtualKind::DdsPng, path, &dds_path, data);
+                    return;
                 }
+                _ => return, // Manifest/PrefabFile/dirs are not user-writable.
             }
-            return;
         }
 
         if let Some(vf) = virtual_files::resolve(path) {
-            match vf.kind {
-                virtual_files::VirtualKind::PalocJson => {
-                    match virtual_files::parse_paloc_jsonl(&data) {
-                        Some(binary) => {
-                            info!("flush {path}: paloc JSONL -> {}B binary, repacking {}",
-                                  binary.len(), vf.source_path);
-                            self.flush_path_sync(&vf.source_path, binary);
-                            self.invalidate_virtual_path(path);
-                        }
-                        None => {
-                            let msg = format!("paloc parse failed: {path}");
-                            warn!("{msg}");
-                            self.push_event(format!("[err] {msg}"));
-                        }
-                    }
-                }
-                virtual_files::VirtualKind::DdsPng => {
-                    let src_entry = match self.vfs.lookup(&vf.source_path) {
-                        Some(e) => e,
-                        None    => { warn!("flush {path}: source {} not in VFS", vf.source_path); return; }
-                    };
-                    let orig_dds = match self.vfs.read_entry(&src_entry) {
-                        Ok(d)  => d,
-                        Err(e) => { warn!("flush {path}: read source DDS: {e}"); return; }
-                    };
-                    match virtual_files::parse_png_to_dds(&data, &orig_dds, &vf.source_path) {
-                        Some(dds) => {
-                            info!("flush {path}: PNG -> {}B DDS, repacking {}",
-                                  dds.len(), vf.source_path);
-                            self.flush_path_sync(&vf.source_path, dds);
-                            self.invalidate_virtual_path(path);
-                        }
-                        None => {
-                            let msg = format!("PNG->DDS failed: {path}");
-                            warn!("{msg}");
-                            self.push_event(format!("[err] {msg}"));
-                        }
-                    }
-                }
-                _ => warn!("flush {path}: write-back not implemented for this virtual format"),
-            }
+            let source = vf.source_path.clone();
+            self.flush_synth_to_source(vf.kind, path, &source, data);
             return;
         }
 
