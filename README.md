@@ -55,7 +55,6 @@ import cdcore.crimsonforge  # noqa: F401  (installs Rust shims for core.*)
 ### `cdfuse` (Linux) / `cdwinfs` (Windows)
 
 Mounts Crimson Desert archives as a filesystem. Decrypts and decompresses on access.
-Read-write: edits repack to PAZ on close.
 
 
 | Crate | Platform | Driver | License | Requirement |
