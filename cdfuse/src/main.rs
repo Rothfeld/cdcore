@@ -72,13 +72,20 @@ fn main() {
         .target(env_logger::Target::Pipe(Box::new(f)))
         .init();
 
-    if args.unmount.is_some() {
-        let mp = args.unmount.as_deref().unwrap();
-        let status = std::process::Command::new("fusermount")
-            .args(["-u", mp])
-            .status()
-            .unwrap_or_else(|e| { eprintln!("fusermount: {e}"); std::process::exit(1); });
-        std::process::exit(if status.success() { 0 } else { 1 });
+    if let Some(mp) = args.unmount.as_deref() {
+        // In-process umount(2) -- avoids spawning the `fusermount` setuid helper.
+        // MNT_DETACH performs a lazy unmount: the filesystem is detached now and
+        // pending I/O finishes in the background. The kernel allows unprivileged
+        // unmount of a FUSE mount as long as the caller owns it (matches the
+        // common case where the user mounting is also the user unmounting).
+        let c_mp = std::ffi::CString::new(mp)
+            .unwrap_or_else(|_| { eprintln!("mountpoint contains nul byte"); std::process::exit(1); });
+        let rc = unsafe { libc::umount2(c_mp.as_ptr(), libc::MNT_DETACH) };
+        if rc != 0 {
+            eprintln!("umount2 {mp}: {}", std::io::Error::last_os_error());
+            std::process::exit(1);
+        }
+        std::process::exit(0);
     }
 
     // Resolve game_dir + mount: CLI args -> saved config -> interactive TUI.
