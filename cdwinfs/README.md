@@ -7,7 +7,7 @@ Browse them in Explorer, open them in your usual editor, save, and the change is
 
 ## Quick start
 
-1. Install **WinFsp** from <https://winfsp.dev/rel/> (next-next-finish).
+1. Install **WinFsp** from <https://winfsp.dev/rel/> .
 2. Extract this zip somewhere stable, e.g. `C:\Tools\cdwinfs\`.
 3. Double-click **`cdwinfs.exe`**.
 

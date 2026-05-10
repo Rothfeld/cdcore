@@ -231,25 +231,22 @@ fn main() {
     drop(host);
 }
 
-/// Read `HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir` via `reg query`.  Returns
-/// the install path with any trailing backslash stripped, or `None` if WinFSP
-/// isn't installed (no registry entry) or `reg` itself failed.
+/// Read `HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir` directly via the Win32
+/// registry API.  Returns the install path with any trailing backslash
+/// stripped, or `None` if WinFSP isn't installed (no registry entry).
+///
+/// In-process registry call (winreg crate) -- no `reg query` / `powershell`
+/// subprocess.  Spawning either trips Sysmon process-creation telemetry that
+/// matches over-broad Sigma rules in VirusTotal sandboxes.
 fn winfsp_install_dir() -> Option<String> {
-    let output = std::process::Command::new("reg")
-        .args(["query", r"HKLM\SOFTWARE\WOW6432Node\WinFsp", "/v", "InstallDir"])
-        .output()
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(r"SOFTWARE\WOW6432Node\WinFsp", KEY_READ)
         .ok()?;
-    if !output.status.success() { return None; }
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        if let Some(pos) = line.find("REG_SZ") {
-            let dir = line[pos + "REG_SZ".len()..].trim().trim_end_matches('\\');
-            if !dir.is_empty() {
-                return Some(dir.to_string());
-            }
-        }
-    }
-    None
+    let dir: String = key.get_value("InstallDir").ok()?;
+    let dir = dir.trim_end_matches('\\').to_string();
+    (!dir.is_empty()).then_some(dir)
 }
 
 /// Prepend the WinFSP bin directory to PATH so `winfsp_init` can find

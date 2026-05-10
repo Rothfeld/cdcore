@@ -45,25 +45,34 @@ pub fn detect_free_drive() -> Option<String> {
     None
 }
 
+/// Scan the three standard Uninstall hives in-process for a "Crimson Desert"
+/// entry and resolve its `InstallLocation`.
+///
+/// Done via the Win32 registry API (winreg crate), not by shelling out to
+/// `powershell`.  A spawned `powershell.exe` triggers Sysmon process_creation
+/// events that match noisy Sigma rules in VirusTotal sandbox telemetry.
 fn from_uninstall_registry() -> Option<PathBuf> {
-    let ps = r#"
-$keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-foreach ($k in $keys) {
-    $hit = Get-ItemProperty $k -ErrorAction SilentlyContinue |
-           Where-Object { $_.DisplayName -like '*Crimson Desert*' } |
-           Select-Object -First 1
-    if ($hit -and $hit.InstallLocation) { $hit.InstallLocation.TrimEnd('\'); break }
-}
-"#;
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", ps])
-        .output().ok()?;
-    let raw = String::from_utf8_lossy(&out.stdout);
-    let s = raw.trim();
-    if s.is_empty() { return None; }
-    resolve_packages(&PathBuf::from(s))
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+    let hives = [
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_CURRENT_USER,  r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ];
+    for (hive, path) in hives {
+        let Ok(root) = RegKey::predef(hive).open_subkey_with_flags(path, KEY_READ)
+            else { continue };
+        for subkey in root.enum_keys().flatten() {
+            let Ok(sub) = root.open_subkey_with_flags(&subkey, KEY_READ) else { continue };
+            let Ok(name): Result<String, _> = sub.get_value("DisplayName") else { continue };
+            if !name.contains("Crimson Desert") { continue; }
+            let Ok(loc): Result<String, _> = sub.get_value("InstallLocation") else { continue };
+            let loc = loc.trim_end_matches('\\');
+            if loc.is_empty() { continue; }
+            if let Some(p) = resolve_packages(&PathBuf::from(loc)) { return Some(p); }
+        }
+    }
+    None
 }
 
 fn resolve_packages(root: &Path) -> Option<PathBuf> {
