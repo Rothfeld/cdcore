@@ -1,0 +1,33 @@
+[size=4][b]Description[/b][/size]
+Mounts Crimson Desert archives as a Windows drive (default [b]Z:\[/b]). Browse them in Explorer, open them in your usual editor, save*, and the change is repacked into the game.
+
+[url=https://github.com/Rothfeld/cdcore]https://github.com/Rothfeld/cdcore[/url]
+
+
+[size=4][b]Installation instructions[/b][/size]
+[list=1]
+[*]Install [url=https://winfsp.dev/rel/]WinFsp[/url] .[/*]
+[*]Extract this zip somewhere stable, e.g. [b]C:\Tools\cdwinfs\[/b].[/*]
+[*]Double-click [b]cdwinfs.exe[/b]. press [b]Enter[/b] once the detected paths look right, and a [b]Z:\[/b] drive shows up in [b]This PC[/b].[/*]
+[/list]
+
+
+[size=4][b]Main features[/b][/size]
+[list]
+[*]Browse the entire game archive tree as ordinary folders under [b]Z:\[/b].[/*]
+[*]Edit localisation strings as JSON in Notepad / VS Code via [b]Z:\.paloc.jsonl\[/b] -- saving repacks back to the game.[/*]
+[*]Edit textures as PNG in Paint / GIMP / Photoshop via [b]Z:\.dds.png\[/b] -- saving repacks back to the game.[/*]
+[*]Open static, LOD, and skinned meshes as FBX in Blender via [b]Z:\.pam.fbx\[/b], [b]Z:\.pamlod.fbx\[/b], [b]Z:\.pac.fbx\[/b] (read-only for now).[/*]
+[*]Play voice clips as OGG in VLC via [b]Z:\.wem.ogg\[/b] (read-only). Voice-over languages exposed as [b]sound@0005[/b] (KR), [b]sound@0006[/b] (EN), [b]sound@0035[/b] (JP).[/*]
+[/list]
+
+
+[size=4][b]Requirements[/b][/size]
+[list]
+[*]Windows x86-64.[/*]
+[*][url=https://winfsp.dev/rel/]WinFsp 2.x[/url] -- the kernel-mode filesystem driver. Without it, [b]cdwinfs.exe[/b] will not start.[/*]
+[/list]
+
+
+[size=4][b]Shout outs[/b][/size]
+[url=https://github.com/hzeemr/crimsonforge]https://github.com/hzeemr/crimsonforge[/url] for the reverse engineering effort.

@@ -182,6 +182,9 @@ if code examples are given in the documentation, these must be tested to functio
 a readme file should not contain comparisons with older versions of the software (thats what release notes are for).
 if something was changed, the documentation describes the new version only. it doesnt compare to the old one.
 
+documentation should not build expectation and then disappoint it.
+if a feature has a caveat, dont claim the general rule and then the negative cases. claim the conservative rule and then the positive cases.
+
 ---
 
 in dependency definition files, if the format allows it, add comments noting what the dependency is for.
