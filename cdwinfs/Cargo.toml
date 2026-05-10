@@ -30,3 +30,4 @@ flate2  = "1.0"                                             # compress THIRD_PAR
 opt-level = 3
 lto = true
 codegen-units = 1
+strip = true        # drop symbols → smaller .exe + fewer AV heuristic hits

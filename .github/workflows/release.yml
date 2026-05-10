@@ -65,10 +65,12 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: cdfuse-linux-x86_64
-            binary: cdfuse/target/release/cdfuse
+            paths: cdfuse/target/release/cdfuse
           - os: windows-latest
             artifact: cdwinfs-windows-x86_64
-            binary: cdwinfs/target/release/cdwinfs.exe
+            paths: |
+              cdwinfs.zip
+              cdwinfs.zip.sha256
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -102,10 +104,27 @@ jobs:
         run: cargo build --release
         working-directory: ${{ runner.os == 'Windows' && 'cdwinfs' || 'cdfuse' }}
 
+      # Bundle the .exe with LICENSE + README + third-party notices into a zip.
+      # Distributing a labelled archive instead of a bare binary helps with
+      # automated AV/Nexus heuristics and gives users a SHA-256 to verify.
+      - name: Package Windows release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = "stage"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item cdwinfs/target/release/cdwinfs.exe $stage/
+          Copy-Item cdwinfs/LICENSE                    $stage/
+          Copy-Item cdwinfs/README.md                  $stage/
+          Copy-Item cdwinfs/THIRD_PARTY_LICENSES.md    $stage/
+          Compress-Archive -Path "$stage/*" -DestinationPath cdwinfs.zip -CompressionLevel Optimal
+          $hash = (Get-FileHash cdwinfs.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  cdwinfs.zip" | Out-File cdwinfs.zip.sha256 -Encoding ascii
+
       - uses: actions/upload-artifact@v4.6.2
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.binary }}
+          path: ${{ matrix.paths }}
 
   # Collect all artifacts from the jobs above and attach them to the GitHub Release
   # created automatically when the tag was pushed.
@@ -113,11 +132,24 @@ jobs:
     needs: [wheels, cdfuse-binary]
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # required to upload release assets
+      contents: write       # upload release assets
+      id-token: write       # mint OIDC token for Sigstore
+      attestations: write   # publish build provenance attestation
     steps:
       - uses: actions/download-artifact@v4.3.0
         with:
           path: artifacts   # downloads all artifacts into artifacts/<name>/
+
+      # SLSA build provenance — verifiable proof that these exact files were
+      # produced by this exact commit on GitHub Actions. Users (and Nexus
+      # reviewers) can run `gh attestation verify <file> --owner <org>` to
+      # confirm. Skips sidecars (.sha256) — only the real artifacts.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/wheels-*/*.whl
+            artifacts/cdfuse-linux-x86_64/cdfuse
+            artifacts/cdwinfs-windows-x86_64/cdwinfs.zip
 
       - uses: softprops/action-gh-release@v2
         with:
