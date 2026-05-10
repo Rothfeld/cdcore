@@ -31,4 +31,16 @@ fn main() {
         text.len(), compressed.len(),
         compressed.len() as f64 / text.len() as f64 * 100.0
     );
+
+    // Embed icon + application manifest into the Windows .exe.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let icon = std::path::Path::new(&manifest).join(".assets/cd.ico");
+        let manifest_xml = std::path::Path::new(&manifest).join("manifest.xml");
+        let mut res = winres::WindowsResource::new();
+        res.set_icon(icon.to_str().expect("icon path not utf-8"));
+        res.set_manifest_file(manifest_xml.to_str().expect("manifest path not utf-8"));
+        res.compile().expect("winres compile failed");
+        println!("cargo:rerun-if-changed={}", icon.display());
+        println!("cargo:rerun-if-changed={}", manifest_xml.display());
+    }
 }
