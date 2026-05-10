@@ -97,14 +97,14 @@ events. Close that window (or press **Esc**) to unmount the drive.
 
 ### Verifying the download
 
-A `cdwinfs.zip.sha256` sidecar lives next to the zip on the GitHub release
-page. To verify:
+The release body lists each artifact's SHA-256 inline (under the
+**VirusTotal scans** section). To check the file you downloaded:
 
 ```cmd
 certutil -hashfile cdwinfs.zip SHA256
 ```
 
-Compare the printed hash against the sidecar.
+Compare against the value on the release page.
 
 Every release also publishes a SLSA build provenance attestation. With
 the GitHub CLI installed:
@@ -112,6 +112,9 @@ the GitHub CLI installed:
 ```cmd
 gh attestation verify cdwinfs.zip --owner Rothfeld
 ```
+
+This proves the zip was built by GitHub Actions from a specific commit on
+the source repo, not tampered with after upload.
 
 ### Command-line options
 

@@ -68,9 +68,7 @@ jobs:
             paths: cdfuse/target/release/cdfuse
           - os: windows-latest
             artifact: cdwinfs-windows-x86_64
-            paths: |
-              cdwinfs.zip
-              cdwinfs.zip.sha256
+            paths: cdwinfs.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -106,7 +104,9 @@ jobs:
 
       # Bundle the .exe with LICENSE + README + third-party notices into a zip.
       # Distributing a labelled archive instead of a bare binary helps with
-      # automated AV/Nexus heuristics and gives users a SHA-256 to verify.
+      # automated AV/Nexus heuristics. The release body's VirusTotal section
+      # (added by github-release) lists the SHA-256, and the SLSA attestation
+      # is hash-bound -- no separate .sha256 sidecar needed.
       - name: Package Windows release
         if: runner.os == 'Windows'
         shell: pwsh
@@ -118,8 +118,6 @@ jobs:
           Copy-Item cdwinfs/README.md                  $stage/
           Copy-Item cdwinfs/THIRD_PARTY_LICENSES.md    $stage/
           Compress-Archive -Path "$stage/*" -DestinationPath cdwinfs.zip -CompressionLevel Optimal
-          $hash = (Get-FileHash cdwinfs.zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  cdwinfs.zip" | Out-File cdwinfs.zip.sha256 -Encoding ascii
 
       - uses: actions/upload-artifact@v4.6.2
         with:
