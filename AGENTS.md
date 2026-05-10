@@ -191,14 +191,14 @@ if generating such a file, dont just use 'llm-memorized' version numbers, check 
 ---
 
 when writing a plan, once the plan is completed, insert two summaries at the top.
-<short one line summary>
+{short one line summary}
 focus on the goal, the desired state. motivation if given.
 
-<longer summary>
+{longer summary}
 broad strokes high level description.
 should be light on implementation specifics and focus more on broad architectural changes and module relationsships
 
-<full original plan>
+{full original plan}
 
 ---
 
