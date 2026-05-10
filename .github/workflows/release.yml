@@ -195,6 +195,6 @@ jobs:
             fi
             links+="- [\`$name\`](https://www.virustotal.com/gui/file/$sha) — \`$sha\`"$'\n'
           done
-          body=$(gh release view "$TAG" --json body -q .body)
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)
           printf '%s\n\n## VirusTotal scans\n\n%s' "$body" "$links" \
-            | gh release edit "$TAG" -F -
+            | gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" -F -
